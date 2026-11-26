@@ -56,10 +56,27 @@ small.ref{color:#888}
 .owner td input[type=number]{min-width:84px}
 .owner td input[type=date]{min-width:130px}
 #sumOut table{font-size:13px}
-#qsModal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50;overflow:auto}
-#qsModal .box{background:#fff;max-width:860px;margin:40px auto;border-radius:10px;padding:16px 18px}
+#qsModal,.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50;overflow:auto}
+#qsModal .box,.modal .box{background:#fff;max-width:860px;margin:40px auto;border-radius:10px;padding:16px 18px}
 #qsModal td.old{color:#888}
-@media print{header,.noprint{display:none}.page{display:none!important}.page.print{display:block!important}}
+#printArea{display:none}
+.doc{max-width:760px;margin:0 auto 24px;background:#fff;padding:28px 34px;border:1px solid var(--line);border-radius:10px;font-size:13.5px;line-height:1.6}
+.doc h1{font-size:20px;margin:0 0 4px;color:var(--teal)}
+.doc .meta{color:#555;font-size:12.5px;margin-bottom:12px}
+.doc .big{background:var(--teal-l);border-radius:8px;padding:12px 16px;margin:10px 0 14px;font-size:15px}
+.doc .big b{font-size:22px;color:var(--teal)}
+.doc h2{font-size:15px;margin:16px 0 6px;border-left:4px solid var(--teal);padding-left:8px}
+.doc table{font-size:12.5px}
+.doc td.ex{color:#555;font-size:12px}
+.doc .foot{font-size:11.5px;color:#666;margin-top:14px;border-top:1px solid var(--line);padding-top:8px}
+@page{size:A4;margin:14mm}
+@media print{
+  header,.noprint,main>section{display:none!important}
+  body{background:#fff}
+  #printArea{display:block!important}
+  .doc{border:none;padding:0;max-width:none;page-break-after:always;break-after:page}
+  .doc:last-child{page-break-after:auto;break-after:auto}
+}
 </style>
 </head>
 <body>
@@ -75,9 +92,11 @@ small.ref{color:#888}
     <button onclick="document.getElementById('file').click()">📂 載入專案</button>
     <input type="file" id="file" accept=".json,application/json" style="display:none" onchange="loadProject(this)">
     <button onclick="document.getElementById('qsFile').click()">📥 匯入速算專案</button>
+    <button onclick="openDocImport()">📋 謄本／稅單匯入</button>
     <input type="file" id="qsFile" accept=".json,application/json" style="display:none" onchange="importQuick(this)">
     <button class="pri" onclick="recalc(true)">🔄 計算</button>
     <button onclick="saveProject()">💾 儲存專案</button>
+    <span id="dueBadge" class="pill est" style="display:none;cursor:pointer" onclick="document.querySelector('.tab[data-p=p5]').click()"></span>
     <span id="status"></span>
   </div>
 </header>
@@ -158,7 +177,11 @@ small.ref{color:#888}
 
 <!-- ③ 個人試算 -->
 <section class="page" id="p3">
-  <div class="card noprint"><label class="f" style="max-width:320px">所有權人<select id="pickOwner" onchange="renderPerson()"></select></label></div>
+  <div class="card noprint" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+    <label class="f" style="min-width:260px">所有權人<select id="pickOwner" onchange="renderPerson()"></select></label>
+    <button onclick="printDocs([$('pickOwner').value])">🖨 列印說明文件（A4／存 PDF）</button>
+    <button onclick="downloadCard($('pickOwner').value)">📤 下載手機圖卡</button>
+  </div>
   <div id="personOut"></div>
 </section>
 
@@ -169,6 +192,7 @@ small.ref{color:#888}
     <div class="noprint" style="margin-bottom:8px">
       <label class="chk" style="display:inline-flex"><input type="checkbox" id="sumShowGeneral" onchange="renderSummary()">同時顯示一般（未減免）金額</label>
       <button class="sm" onclick="exportCSV()">匯出 Excel（CSV）</button>
+      <button class="sm" onclick="printDocs(RES.owners.filter(x=>!x.skip).map(x=>x.id))">🖨 列印全部說明文件</button>
     </div>
     <div class="scroll" id="sumOut"></div>
   </div>
@@ -176,8 +200,13 @@ small.ref{color:#888}
 
 <!-- ⑤ 參數 -->
 <section class="page" id="p5">
+  <div class="card"><h2>參數庫</h2>
+    <div id="libBox"></div>
+    <p id="dueList" style="margin:10px 0 6px"></p>
+    <button class="pri" onclick="openParamUpdate()">🔄 產生更新提示詞／貼回更新結果</button>
+  </div>
   <div class="card"><h2>稅率參數</h2>
-    <p class="hint">第一期參數內建於工具；修改後只存在本案 JSON。標示「待查證」者尚未核對官方來源。</p>
+    <p class="hint">「本案覆蓋」只存在本案 JSON，不會改到參數庫。標示「待查證」者尚未核對官方來源。</p>
     <div class="scroll"><table id="paramTbl"></table></div>
   </div>
   <div class="card"><h2>消費者物價指數（稅務專用）</h2>
@@ -186,12 +215,47 @@ small.ref{color:#888}
   </div>
 </section>
 </main>
+<div id="printArea"></div>
+
+<div id="docModal" class="modal"><div class="box">
+  <h2 style="margin:0 0 6px;color:var(--teal);font-size:16px">謄本／稅單／地政雲端匯入</h2>
+  <ol class="hint" style="margin:4px 0 10px;padding-left:20px">
+    <li>按「複製提示詞」。</li>
+    <li>開 Claude 或 Gemini，貼上提示詞，並附上謄本 PDF 或截圖（土地、建物謄本、房屋稅單、地價稅單、地政網站截圖都可以，一次多份）。</li>
+    <li>把 AI 回覆的 JSON 整段貼到下面，按「解析」。</li>
+  </ol>
+  <div style="display:flex;gap:8px;margin-bottom:8px"><button class="pri" onclick="copyDocPrompt()">📋 複製提示詞</button><span id="docCopyMsg" class="hint" style="align-self:center"></span></div>
+  <details style="margin-bottom:8px"><summary class="hint">查看提示詞內容</summary><pre id="docPromptPre" style="white-space:pre-wrap;font-size:12px;background:#f6f8f8;padding:8px;border-radius:6px;max-height:240px;overflow:auto"></pre></details>
+  <textarea id="docPaste" style="width:100%;height:130px;font:12px monospace" placeholder="把 AI 回覆的 JSON 貼在這裡"></textarea>
+  <div style="margin:8px 0"><button onclick="parseDocImport()">解析</button> <span id="docErr" class="bad"></span></div>
+  <div class="scroll"><table id="docTbl"></table></div>
+  <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+    <button onclick="$('docModal').style.display='none'">關閉</button><button class="pri" id="docApplyBtn" style="display:none" onclick="applyDocImport()">套用勾選項目</button>
+  </div>
+</div></div>
+
+<div id="paramModal" class="modal"><div class="box">
+  <h2 style="margin:0 0 6px;color:var(--teal);font-size:16px">更新參數庫</h2>
+  <ol class="hint" style="margin:4px 0 10px;padding-left:20px">
+    <li>按「複製提示詞」，貼給 Claude（要開啟網路搜尋）。</li>
+    <li>把 Claude 回覆的 JSON 整段貼到下面，按「檢查」。</li>
+    <li>確認新舊值與來源後勾選，按「寫入參數庫」。</li>
+  </ol>
+  <div style="display:flex;gap:8px;margin-bottom:6px"><button class="pri" onclick="copyUpdatePrompt()">📋 複製提示詞</button><span id="puCopyMsg" class="hint" style="align-self:center"></span></div>
+  <pre id="puPrompt" style="white-space:pre-wrap;font-size:12px;background:#f6f8f8;padding:8px;border-radius:6px;max-height:200px;overflow:auto"></pre>
+  <textarea id="puPaste" style="width:100%;height:120px;font:12px monospace" placeholder="把 Claude 回覆的 JSON 貼在這裡"></textarea>
+  <div style="margin:8px 0"><button onclick="parseParamUpdate()">檢查</button> <span id="puErr" class="bad"></span></div>
+  <div class="scroll"><table id="puTbl"></table></div>
+  <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+    <button onclick="$('paramModal').style.display='none'">關閉</button><button class="pri" id="puApply" style="display:none" onclick="applyParamUpdate()">寫入參數庫</button>
+  </div>
+</div></div>
 
 <div id="qsModal"><div class="box">
   <h2 style="margin:0 0 6px;color:var(--teal);font-size:16px">匯入速算專案</h2>
   <p class="hint" id="qsSrc"></p>
   <div class="scroll"><table id="qsTbl"></table></div>
-  <div class="warn" style="margin-top:8px">⚠ 全案總銷坪、每位地主的分回坪數與車位，速算專案檔目前沒有存，請在速算工具畫面查看後手動填入（第二期改為自動）。</div>
+  <div class="warn" id="qsWarn" style="margin-top:8px">⚠ 這份速算專案檔是舊版存的，沒有總銷坪與各人分回坪數。請在速算工具打開後重新「儲存專案」一次，再匯入；或在本工具手動填入。</div>
   <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
     <button onclick="closeQuick()">取消</button><button class="pri" onclick="applyQuick()">套用勾選項目</button>
   </div>
@@ -202,8 +266,8 @@ small.ref{color:#888}
 // 計算引擎（純函式，不碰 DOM）
 // ════════════════════════════════════════════════════════════════
 const P2M = 3.30579;           // 1 坪 = 3.30579 ㎡
-const CPI_BASE = '115/09';
-const CPI = {"48":[1144.2,1135,1118.1,1119.2,1118.1,1099.6,1066.4,1010.9,981,996.6,1025.6,1026.6],"49":[1017.3,994.9,961,917.2,921.7,895.4,889,851.5,840.7,848.3,847.6,863.2],"50":[861.2,845.1,845.1,838.8,838.2,838.2,841.9,832,819.3,814,820.5,828.3],"51":[833.9,824.7,827.7,824.1,813.4,818.1,830.8,822.3,803,788.4,799,805.3],"52":[797.3,796.8,795.1,790.1,796.8,804.1,814,812.2,787.8,788.4,797.9,800.1],"53":[799,797.9,800.7,805.9,803,809.3,815.8,806.4,795.1,783.5,784.6,795.1],"54":[805.9,808.2,811.1,808.2,804.1,800.1,799,794.5,790.6,796.8,795.1,790.6],"55":[792.8,804.1,805.3,799.6,797.9,779.7,778.6,782.4,766.4,761.3,771.7,777.5],"56":[771.7,757.2,770.6,772.2,769.1,763.3,753.6,755.2,747.2,751.1,752.1,744.7],"57":[741.3,746.7,744.7,714.1,710.5,697.7,686.3,669.2,679.2,674.8,687.9,702.1],"58":[696.4,687.5,690,686.7,694.3,688.3,674.4,661.3,661.7,606.6,634.2,663.6],"59":[671.5,660.5,656.3,653.3,656.3,661.7,651,632.4,616.5,626.1,633.8,639.9],"60":[628.5,631,634.2,635.6,634.9,634.9,634.5,623.7,624,619.9,621.6,623],"61":[632.4,619.2,620.6,619.9,616.8,610.5,605.3,584.6,586.1,609.8,617.9,607.2],"62":[623.3,614.5,616.5,607.5,599.8,593.5,577.1,564.7,541.9,502.3,492.4,489.7],"63":[445.9,387.2,381.9,384.5,387.7,388.9,383.9,379.6,367.9,368.5,363.2,365.3],"64":[368.8,368.3,371.5,369.1,368.8,360.7,360.7,359.4,359.9,355.2,358.2,364.6],"65":[358.4,357.1,354.3,353.4,355.2,356.7,355.1,352.6,352.9,354.8,355.7,351.9],"66":[347.2,341.8,343,340.4,339,328.6,328.3,314.4,318.9,322.3,328,329.6],"67":[324,321.6,321.2,315.4,315.6,315.8,316.7,311.1,306.3,303.9,304.8,306.2],"68":[305.2,303.8,299.7,293.8,291.3,288.3,285.8,278.6,269.8,270.5,274.4,272.1],"69":[261.5,256.4,255,253.7,249,242.5,240.8,235.4,226.7,222.7,222.4,222.7],"70":[213.1,209.5,208.6,207.8,208.6,206.6,205.8,203.8,201.4,202.5,203.9,204.2],"71":[202.8,203.5,203,202.4,201.2,200.8,200.9,195,196.9,198.5,200.1,199.3],"72":[199.3,197.3,196.4,195.6,197,195.5,197.7,197.8,197.2,197.3,198.9,201.7],"73":[201.6,199.5,199,198.6,196.2,196.4,197,196.2,195.6,196.3,197.5,198.5],"74":[198.3,196.8,196.7,197.7,198.3,198.6,198.4,199.3,196,196.2,199,201.1],"75":[199.2,198.6,198.7,198.2,197.9,197.4,197.9,196.8,191.9,192.4,195.1,195.9],"76":[196.4,196.9,198.4,197.7,197.7,197.5,195.3,193.7,193,194.8,194.2,192.2],"77":[195.4,196.2,197.3,197,194.8,193.6,193.6,190.9,190.3,189,190,190.1],"78":[190.1,188.5,188,186.4,185,185.5,186.4,184.8,180.1,178.4,183.1,184.3],"79":[183.1,183.3,182,180.2,178.3,179,177.8,174.9,169,172.8,176.2,176.3],"80":[174.4,173.3,174.2,173.1,172.5,172.1,170.9,170.5,170.2,168.6,168.1,169.7],"81":[168,166.6,166.4,163.7,163.2,163.6,164.8,165.5,160.4,160.4,163,164.1],"82":[162.1,161.6,161.1,159.3,159.8,156.8,159.6,160.2,159.2,158.5,158.1,156.8],"83":[157.5,155.5,156,154.5,153.1,153.5,153.2,149.7,149.2,150.8,152.2,152.8],"84":[149.7,150.3,150.1,148,148.3,146.7,147.5,147.2,146.3,146.7,146.1,146.1],"85":[146.3,144.9,145.8,143.9,144.1,143.2,145.4,140.1,140.9,141.4,141.5,142.5],"86":[143.5,142,144.2,143.2,143,140.7,140.7,140.9,140,141.9,142.3,142.1],"87":[140.7,141.6,140.7,140.2,140.7,138.7,139.6,140.3,139.4,138.3,136.9,139.2],"88":[140.1,138.7,141.4,140.4,140,139.9,140.7,138.7,138.6,137.8,138.2,139],"89":[139.4,137.4,139.8,138.7,137.8,138,138.7,138.3,136.4,136.4,135.1,136.8],"90":[136.2,138.8,139.2,138.1,138.1,138.2,138.6,137.7,137.1,135,136.7,139.1],"91":[138.5,136.9,139.2,137.8,138.4,138,138,138.1,138.2,137.4,137.4,138],"92":[137.1,139,139.4,137.9,138,138.8,139.4,138.9,138.4,137.5,138.1,138.1],"93":[137.1,138.1,138.2,136.6,136.8,136.4,134.9,135.4,134.7,134.3,136,135.9],"94":[136.4,135.5,135.1,134.4,133.7,133.3,131.7,130.8,130.6,130.7,132.7,133],"95":[132.8,134.2,134.5,132.8,131.6,131,130.7,131.5,132.2,132.2,132.4,132.1],"96":[132.4,131.9,133.4,131.9,131.6,130.8,131.1,129.4,128.2,125.6,126.3,127.8],"97":[128.6,126.9,128.3,127,126.9,124.6,123.9,123.6,124.4,122.6,123.9,126.2],"98":[126.7,128.7,128.5,127.6,127,127.1,126.9,124.6,125.5,125,125.9,126.5],"99":[126.4,125.7,126.9,125.9,126.1,125.6,125.2,125.2,125.1,124.3,124,125],"100":[125,124.1,125.2,124.3,124,123.2,123.6,123.6,123.4,122.8,122.8,122.5],"101":[122.1,123.8,123.6,122.5,121.9,121.1,120.6,119.5,119.9,120,120.9,120.6],"102":[120.8,120.2,122,121.2,121,120.4,120.6,120.4,118.9,119.2,120,120.2],"103":[119.8,120.3,120,119.2,119.1,118.4,118.5,118,118,117.9,119,119.4],"104":[120.9,120.5,120.8,120.2,119.9,119.1,119.2,118.5,117.7,117.6,118.4,119.3],"105":[120,117.7,118.4,118,118.5,118,117.8,117.8,117.3,115.6,116.1,117.3],"106":[117.3,117.7,118.2,117.9,117.8,116.9,116.9,116.7,116.7,116,115.7,115.9],"107":[116.3,115.2,116.3,115.6,115.7,115.3,114.9,114.9,114.7,114.7,115.4,116],"108":[116.1,115,115.7,114.8,114.7,114.3,114.4,114.4,114.3,114.2,114.7,114.6],"109":[114,115.2,115.7,116,116.1,115.1,115,114.8,114.9,114.5,114.6,114.6],"110":[114.2,113.6,114.3,113.6,113.3,113.1,112.9,112.2,112,111.7,111.4,111.7],"111":[111,111,110.7,109.9,109.6,109.2,109.2,109.3,109,108.7,108.9,108.7],"112":[107.7,108.4,108.1,107.3,107.4,107.3,107.2,106.6,105.9,105.5,105.8,105.9],"113":[105.8,105.2,105.9,105.3,105.1,104.7,104.5,104.1,104,103.8,103.7,103.7],"114":[103.1,103.5,103.5,103.2,103.5,103.3,103,102.5,102.7,102.3,102.4,102.3],"115":[102.4,101.7,102.2,101.4,101.3,100.8,100.4,100.4,100,null,null,null]};
+const CPI_BUILTIN_BASE = '115/09';
+const CPI_BUILTIN = {"48":[1144.2,1135,1118.1,1119.2,1118.1,1099.6,1066.4,1010.9,981,996.6,1025.6,1026.6],"49":[1017.3,994.9,961,917.2,921.7,895.4,889,851.5,840.7,848.3,847.6,863.2],"50":[861.2,845.1,845.1,838.8,838.2,838.2,841.9,832,819.3,814,820.5,828.3],"51":[833.9,824.7,827.7,824.1,813.4,818.1,830.8,822.3,803,788.4,799,805.3],"52":[797.3,796.8,795.1,790.1,796.8,804.1,814,812.2,787.8,788.4,797.9,800.1],"53":[799,797.9,800.7,805.9,803,809.3,815.8,806.4,795.1,783.5,784.6,795.1],"54":[805.9,808.2,811.1,808.2,804.1,800.1,799,794.5,790.6,796.8,795.1,790.6],"55":[792.8,804.1,805.3,799.6,797.9,779.7,778.6,782.4,766.4,761.3,771.7,777.5],"56":[771.7,757.2,770.6,772.2,769.1,763.3,753.6,755.2,747.2,751.1,752.1,744.7],"57":[741.3,746.7,744.7,714.1,710.5,697.7,686.3,669.2,679.2,674.8,687.9,702.1],"58":[696.4,687.5,690,686.7,694.3,688.3,674.4,661.3,661.7,606.6,634.2,663.6],"59":[671.5,660.5,656.3,653.3,656.3,661.7,651,632.4,616.5,626.1,633.8,639.9],"60":[628.5,631,634.2,635.6,634.9,634.9,634.5,623.7,624,619.9,621.6,623],"61":[632.4,619.2,620.6,619.9,616.8,610.5,605.3,584.6,586.1,609.8,617.9,607.2],"62":[623.3,614.5,616.5,607.5,599.8,593.5,577.1,564.7,541.9,502.3,492.4,489.7],"63":[445.9,387.2,381.9,384.5,387.7,388.9,383.9,379.6,367.9,368.5,363.2,365.3],"64":[368.8,368.3,371.5,369.1,368.8,360.7,360.7,359.4,359.9,355.2,358.2,364.6],"65":[358.4,357.1,354.3,353.4,355.2,356.7,355.1,352.6,352.9,354.8,355.7,351.9],"66":[347.2,341.8,343,340.4,339,328.6,328.3,314.4,318.9,322.3,328,329.6],"67":[324,321.6,321.2,315.4,315.6,315.8,316.7,311.1,306.3,303.9,304.8,306.2],"68":[305.2,303.8,299.7,293.8,291.3,288.3,285.8,278.6,269.8,270.5,274.4,272.1],"69":[261.5,256.4,255,253.7,249,242.5,240.8,235.4,226.7,222.7,222.4,222.7],"70":[213.1,209.5,208.6,207.8,208.6,206.6,205.8,203.8,201.4,202.5,203.9,204.2],"71":[202.8,203.5,203,202.4,201.2,200.8,200.9,195,196.9,198.5,200.1,199.3],"72":[199.3,197.3,196.4,195.6,197,195.5,197.7,197.8,197.2,197.3,198.9,201.7],"73":[201.6,199.5,199,198.6,196.2,196.4,197,196.2,195.6,196.3,197.5,198.5],"74":[198.3,196.8,196.7,197.7,198.3,198.6,198.4,199.3,196,196.2,199,201.1],"75":[199.2,198.6,198.7,198.2,197.9,197.4,197.9,196.8,191.9,192.4,195.1,195.9],"76":[196.4,196.9,198.4,197.7,197.7,197.5,195.3,193.7,193,194.8,194.2,192.2],"77":[195.4,196.2,197.3,197,194.8,193.6,193.6,190.9,190.3,189,190,190.1],"78":[190.1,188.5,188,186.4,185,185.5,186.4,184.8,180.1,178.4,183.1,184.3],"79":[183.1,183.3,182,180.2,178.3,179,177.8,174.9,169,172.8,176.2,176.3],"80":[174.4,173.3,174.2,173.1,172.5,172.1,170.9,170.5,170.2,168.6,168.1,169.7],"81":[168,166.6,166.4,163.7,163.2,163.6,164.8,165.5,160.4,160.4,163,164.1],"82":[162.1,161.6,161.1,159.3,159.8,156.8,159.6,160.2,159.2,158.5,158.1,156.8],"83":[157.5,155.5,156,154.5,153.1,153.5,153.2,149.7,149.2,150.8,152.2,152.8],"84":[149.7,150.3,150.1,148,148.3,146.7,147.5,147.2,146.3,146.7,146.1,146.1],"85":[146.3,144.9,145.8,143.9,144.1,143.2,145.4,140.1,140.9,141.4,141.5,142.5],"86":[143.5,142,144.2,143.2,143,140.7,140.7,140.9,140,141.9,142.3,142.1],"87":[140.7,141.6,140.7,140.2,140.7,138.7,139.6,140.3,139.4,138.3,136.9,139.2],"88":[140.1,138.7,141.4,140.4,140,139.9,140.7,138.7,138.6,137.8,138.2,139],"89":[139.4,137.4,139.8,138.7,137.8,138,138.7,138.3,136.4,136.4,135.1,136.8],"90":[136.2,138.8,139.2,138.1,138.1,138.2,138.6,137.7,137.1,135,136.7,139.1],"91":[138.5,136.9,139.2,137.8,138.4,138,138,138.1,138.2,137.4,137.4,138],"92":[137.1,139,139.4,137.9,138,138.8,139.4,138.9,138.4,137.5,138.1,138.1],"93":[137.1,138.1,138.2,136.6,136.8,136.4,134.9,135.4,134.7,134.3,136,135.9],"94":[136.4,135.5,135.1,134.4,133.7,133.3,131.7,130.8,130.6,130.7,132.7,133],"95":[132.8,134.2,134.5,132.8,131.6,131,130.7,131.5,132.2,132.2,132.4,132.1],"96":[132.4,131.9,133.4,131.9,131.6,130.8,131.1,129.4,128.2,125.6,126.3,127.8],"97":[128.6,126.9,128.3,127,126.9,124.6,123.9,123.6,124.4,122.6,123.9,126.2],"98":[126.7,128.7,128.5,127.6,127,127.1,126.9,124.6,125.5,125,125.9,126.5],"99":[126.4,125.7,126.9,125.9,126.1,125.6,125.2,125.2,125.1,124.3,124,125],"100":[125,124.1,125.2,124.3,124,123.2,123.6,123.6,123.4,122.8,122.8,122.5],"101":[122.1,123.8,123.6,122.5,121.9,121.1,120.6,119.5,119.9,120,120.9,120.6],"102":[120.8,120.2,122,121.2,121,120.4,120.6,120.4,118.9,119.2,120,120.2],"103":[119.8,120.3,120,119.2,119.1,118.4,118.5,118,118,117.9,119,119.4],"104":[120.9,120.5,120.8,120.2,119.9,119.1,119.2,118.5,117.7,117.6,118.4,119.3],"105":[120,117.7,118.4,118,118.5,118,117.8,117.8,117.3,115.6,116.1,117.3],"106":[117.3,117.7,118.2,117.9,117.8,116.9,116.9,116.7,116.7,116,115.7,115.9],"107":[116.3,115.2,116.3,115.6,115.7,115.3,114.9,114.9,114.7,114.7,115.4,116],"108":[116.1,115,115.7,114.8,114.7,114.3,114.4,114.4,114.3,114.2,114.7,114.6],"109":[114,115.2,115.7,116,116.1,115.1,115,114.8,114.9,114.5,114.6,114.6],"110":[114.2,113.6,114.3,113.6,113.3,113.1,112.9,112.2,112,111.7,111.4,111.7],"111":[111,111,110.7,109.9,109.6,109.2,109.2,109.3,109,108.7,108.9,108.7],"112":[107.7,108.4,108.1,107.3,107.4,107.3,107.2,106.6,105.9,105.5,105.8,105.9],"113":[105.8,105.2,105.9,105.3,105.1,104.7,104.5,104.1,104,103.8,103.7,103.7],"114":[103.1,103.5,103.5,103.2,103.5,103.3,103,102.5,102.7,102.3,102.4,102.3],"115":[102.4,101.7,102.2,101.4,101.3,100.8,100.4,100.4,100,null,null,null]};
 
 // 參數：key → {label, value, unit, verified, note}
 const PARAM_DEFS = {
@@ -224,7 +288,20 @@ const PARAM_DEFS = {
   houseExtMax:  {label:'房屋稅減半延長上限', value:10, unit:'年', verified:true},
   declaredRatio:{label:'未申報地價者：申報地價／公告地價', value:0.8, unit:'比率', verified:true}
 };
-function paramsOf(c){ const o={}; for(const k in PARAM_DEFS){ const v=c.paramOverrides&&c.paramOverrides[k]; o[k]=(v!==undefined&&v!==null&&v!=='')?+v:PARAM_DEFS[k].value; } return o; }
+// ── 參數庫：本案覆蓋 > 使用中的參數庫（雲端最新，或舊案存檔時的版本）> 內建值 ──
+// 下次檢查日：已確認者一年一查；待查證者立即提醒；CPI 每月
+const BUILTIN_NEXT={cpi:'2026-11-10'};
+function builtinLib(){
+  const params={};
+  for(const k in PARAM_DEFS){ const d=PARAM_DEFS[k]; params[k]={value:d.value,verified:!!d.verified,source:d.source||'',effective:'',nextCheck:d.verified?'2027-11-26':'2026-11-26',note:d.note||''}; }
+  return {schema:'tax-params-1',version:0,updatedAt:'內建',params,cpi:{base:CPI_BUILTIN_BASE,table:CPI_BUILTIN,source:'溫州公園稅費試算 Excel「稅務專用」頁',nextCheck:BUILTIN_NEXT.cpi}};
+}
+let LIB=builtinLib();          // 參數庫最新版（雲端或快取）
+let FROZEN=null;               // 舊案存檔時的參數（版本不同時使用）
+const activeLib=()=>FROZEN||LIB;
+function cpiTable(){ return activeLib().cpi.table; }
+function cpiBase(){ return activeLib().cpi.base; }
+function paramsOf(c){ const L=activeLib().params, o={}; for(const k in PARAM_DEFS){ const v=c.paramOverrides&&c.paramOverrides[k]; o[k]=(v!==undefined&&v!==null&&v!=='')?+v:(L[k]&&L[k].value!=null?+L[k].value:PARAM_DEFS[k].value); } return o; }
 
 const num = v => { const n=parseFloat(String(v??'').replace(/[,，\s]/g,'')); return isFinite(n)?n:0; };
 const numOrNull = v => { if(v===null||v===undefined||String(v).trim()==='')return null; const n=num(v); return n; };
@@ -234,7 +311,7 @@ function rocToDate(s){ const p=parseROCym(s); return p?new Date(p.y+1911,p.m-1,1
 function toDate(s){ if(!s)return null; const d=new Date(s); return isNaN(d)?null:d; }
 function fullYears(a,b){ if(!a||!b)return 0; let y=b.getFullYear()-a.getFullYear(); if(b.getMonth()<a.getMonth()||(b.getMonth()===a.getMonth()&&b.getDate()<a.getDate()))y--; return Math.max(0,y); }
 function yearsBetween(a,b){ if(!a||!b)return 0; return Math.max(0,(b-a)/(365.2425*864e5)); }
-function cpiLookup(ym){ const p=parseROCym(ym); if(!p)return null; const row=CPI[String(p.y)]; if(!row)return null; const v=row[p.m-1]; return (v==null)?null:v; }
+function cpiLookup(ym){ const p=parseROCym(ym); if(!p)return null; const row=cpiTable()[String(p.y)]; if(!row)return null; const v=row[p.m-1]; return (v==null)?null:v; }
 function shareVal(num_,den){ const n=num(num_),d=num(den); return d>0?n/d:0; }
 
 // 土增稅一般稅額（未減徵）
@@ -352,6 +429,7 @@ function calcCase(c){
       const E=num(t.prevValue)*cp*tArea;
       const H=num(x.p.ann)*tArea-E-num(t.improve);
       const hs=toDate(t.holdStart)||rocToDate(t.prevYM);
+      if(!t.holdStart&&/贈與|繼承/.test(t.cause||''))W.push(`第 ${i+1} 筆取得原因為「${t.cause}」：持有年限暫以前次移轉年月 ${t.prevYM||'—'} 起算，請確認`);
       const yrs=fullYears(hs,tDate);
       const self=o.lvtSelf&&o.lvtSelf!=='none';
       const G=lvtGeneral(H,E,yrs,P.lvtSelf,self);
@@ -504,6 +582,7 @@ function renderOwners(){
       <input placeholder="住址" value="${esc(o.address)}" style="flex:1;min-width:200px" onchange="setOv('${P}.address',this.value)">
       <button class="sm del" onclick="delOwner(${i})">刪除</button>
     </div>
+    ${ownerRefHTML(o)}
     <div class="grid">
       <label class="f">土增稅稅率${ovrSel(P+'.lvtSelf',o.lvtSelf||'none','none',[['none','一般稅率'],['once','自用住宅（一生一次）'],['oneHouse','自用住宅（一生一屋）']])}</label>
       <label class="f">完工後地價稅${ovrChk(P+'.landSelfUse',o.landSelfUse,false,'自用住宅 2‰')}</label>
@@ -530,7 +609,7 @@ function renderOwners(){
     <div class="scroll"><table><tr><th>類型</th><th>坪數</th><th>總價（萬，空白＝單價推算）</th><th>用途</th><th>自住</th><th>高級住宅加價（%）</th><th class="n">評定現值</th><th></th></tr>
     ${(o.units||[]).map((u,j)=>{const Q=`${P}.units.${j}`;return `<tr>
       <td><select onchange="setO('${Q}.kind',this.value)"><option value="house"${u.kind!=='car'?' selected':''}>房屋</option><option value="car"${u.kind==='car'?' selected':''}>車位</option></select></td>
-      <td><input type="number" step="0.01" value="${esc(u.ping)}" onchange="setO('${Q}.ping',this.value)"></td>
+      <td><input type="number" step="0.01" value="${esc(u.ping)}" onchange="setO('${Q}.ping',this.value)">${u.kind==='car'&&u.cars?`<span class="hint">約 ${fmt2(u.cars)} 位</span>`:''}</td>
       <td><input type="number" value="${esc(u.priceWan)}" onchange="setOv('${Q}.priceWan',this.value)"></td>
       <td>${u.kind==='car'?'<span class="hint">隨主建物</span>':ovrSel(Q+'.use',u.use||'home','home',[['home','住家用'],['biz','營業用']])}</td>
       <td>${u.kind==='car'?'<span class="hint">隨主建物</span>':ovrSel(Q+'.self',u.self||'no','no',[['no','非自住'],['self','自住'],['single','全國單一自住']])}</td>
@@ -558,6 +637,7 @@ function recalc(flash){
   renderPickOwner(); if($('p3').classList.contains('on'))renderPerson();
   if($('p4').classList.contains('on'))renderSummary();
   if($('p5').classList.contains('on'))renderParams();
+  renderDueBadge();
   if(flash)flashStatus('✓ 已重新計算');
 }
 function flashStatus(t){ const s=$('status'); s.textContent=t; clearTimeout(s._t); s._t=setTimeout(()=>s.textContent='',4000); }
@@ -574,7 +654,7 @@ function renderPerson(){
   $('personOut').innerHTML=`<div class="card">
     <h2>${esc(R.name||'（未命名）')}　稅費試算</h2>
     <p>參加合建預估要繳 <b style="font-size:18px">${fmtI(t.all.r)}</b> 元${t.all.g-t.all.r>0.5?`，因適用減免比一般情況少繳 <b class="save">${fmtI(t.all.g-t.all.r)}</b> 元`:''}。</p>
-    <p class="hint">原持分 ${fmt2(L.ownArea)} ㎡；分回房屋 ${fmt2(L.salePing)} 坪；保留土地 ${fmt2(L.retainArea)} ㎡（${pct(L.r)}，${L.rSrc}）；換出土地 ${fmt2(L.ownArea-L.retainArea)} ㎡。試算基準日 ${esc(C.dates.calcDate||'—')}，CPI 表 ${CPI_BASE} 版。</p>
+    <p class="hint">原持分 ${fmt2(L.ownArea)} ㎡；分回房屋 ${fmt2(L.salePing)} 坪；保留土地 ${fmt2(L.retainArea)} ㎡（${pct(L.r)}，${L.rSrc}）；換出土地 ${fmt2(L.ownArea-L.retainArea)} ㎡。試算基準日 ${esc(C.dates.calcDate||'—')}，CPI 表 ${cpiBase()} 版。</p>
     ${R.warnings.map(w=>`<div class="warn">⚠ ${esc(w)}</div>`).join('')}
     <table>
       <tr><th>項目</th><th class="n">一般（未減免）</th><th class="n">減徵後</th><th class="n">省下</th></tr>
@@ -613,21 +693,146 @@ function exportCSV(){
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=(C.name||'稅費試算')+'_總表.csv'; a.click(); URL.revokeObjectURL(a.href);
 }
 
-// ⑤ 參數
+// ⑤ 參數與雲端參數庫
+const LS_URL='taxParamsUrl', LS_KEY='taxParamsKey', LS_CACHE='taxParamsCache';
+const todayStr=()=>{ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+function libDue(L){ L=L||LIB; const t=todayStr(), out=[];
+  for(const k in PARAM_DEFS){ const p=L.params[k]||{}; if(!p.nextCheck||p.nextCheck<=t)out.push({key:k,label:PARAM_DEFS[k].label,nextCheck:p.nextCheck||'—',verified:!!p.verified}); }
+  if(!L.cpi.nextCheck||L.cpi.nextCheck<=t)out.push({key:'cpi',label:'消費者物價指數（稅務專用）',nextCheck:L.cpi.nextCheck||'—',verified:true});
+  return out; }
+function renderDueBadge(){ const n=libDue().length, b=$('dueBadge'); if(!b)return; b.style.display=n?'':'none'; b.textContent=`⚠ ${n} 項參數待更新`; }
+async function libInit(){
+  try{ const c=JSON.parse(localStorage.getItem(LS_CACHE)||'null'); if(c&&c.schema==='tax-params-1'&&c.version>=LIB.version)LIB=c; }catch(_){}
+  const url=localStorage.getItem(LS_URL);
+  if(url){ try{ const r=await fetch(url,{redirect:'follow'}); const d=await r.json(); const L=d.params&&d.params.schema?d.params:d;
+      if(L&&L.schema==='tax-params-1'){ LIB=L; localStorage.setItem(LS_CACHE,JSON.stringify(L)); flashStatus(`✓ 參數庫 v${L.version} 已載入`); }
+      else flashStatus('⚠ 參數庫網址回傳的不是參數檔，暫用快取');
+    }catch(err){ flashStatus('⚠ 讀不到雲端參數庫，暫用快取／內建參數'); } }
+  recalc(); renderDueBadge();
+}
 function renderParams(){
-  const P=paramsOf(C);
-  $('paramTbl').innerHTML='<tr><th>參數</th><th>內建值</th><th>本案使用</th><th>狀態</th><th>說明</th></tr>'+Object.entries(PARAM_DEFS).map(([k,d])=>{
-    const ov=C.paramOverrides&&C.paramOverrides[k]!==undefined&&C.paramOverrides[k]!=='';
-    return `<tr><td>${d.label}</td><td class="n">${d.value}</td><td><input type="number" step="any" class="${ov?'ovr':''}" value="${ov?esc(C.paramOverrides[k]):''}" placeholder="${d.value}" onchange="setParam('${k}',this.value)"></td><td>${d.verified?'<span class="pill">已確認</span>':'<span class="pill est">待查證</span>'}</td><td class="hint">${esc(d.note||'')}</td></tr>`;}).join('');
-  $('cpiNote').textContent=`內建「${CPI_BASE} 以各年月為基期之消費者物價總指數（稅務專用）」，民國 48 年 1 月起。第二期改為雲端參數庫並提醒更新。`;
+  const L=activeLib(), t=todayStr(), url=localStorage.getItem(LS_URL)||'', key=localStorage.getItem(LS_KEY)||'';
+  $('libBox').innerHTML=`
+    ${FROZEN?`<div class="warn" style="font-size:14px">本案使用存檔時的參數 v${FROZEN.version}（${esc(FROZEN.updatedAt)}），參數庫最新為 v${LIB.version}。<button class="sm pri" onclick="useLatestParams()">改用最新參數重算</button></div>`:''}
+    <p>參數庫 <b>v${LIB.version}</b>（更新於 ${esc(LIB.updatedAt)}）｜來源：${url?'雲端（Apps Script）':'本機快取／內建'}</p>
+    <div class="grid">
+      <label class="f">參數庫網址（Apps Script 網頁應用程式）<input id="libUrl" value="${esc(url)}" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label class="f">寫入金鑰（只存在這台裝置）<input id="libKey" type="password" value="${esc(key)}" placeholder="與 Apps Script 的 WRITE_KEY 相同"></label>
+      <div style="align-self:end;display:flex;gap:6px;flex-wrap:wrap"><button onclick="saveLibSettings()">儲存設定並重新讀取</button><button onclick="downloadLib()">下載 params.json</button></div>
+    </div>`;
+  const due=new Set(libDue(L).map(x=>x.key));
+  $('paramTbl').innerHTML='<tr><th>參數</th><th class="n">參數庫值</th><th>本案覆蓋</th><th>狀態</th><th>下次檢查</th><th>來源／說明</th></tr>'+Object.entries(PARAM_DEFS).map(([k,d])=>{
+    const p=L.params[k]||{}, ov=C.paramOverrides&&C.paramOverrides[k]!==undefined&&C.paramOverrides[k]!=='';
+    return `<tr><td>${d.label}</td><td class="n">${p.value??d.value}</td><td><input type="number" step="any" class="${ov?'ovr':''}" value="${ov?esc(C.paramOverrides[k]):''}" placeholder="${p.value??d.value}" onchange="setParam('${k}',this.value)"></td><td>${p.verified?'<span class="pill">已確認</span>':'<span class="pill est">待查證</span>'}</td><td class="${due.has(k)?'bad':''}">${esc(p.nextCheck||'—')}${due.has(k)?' ⚠':''}</td><td class="hint">${p.source?`<a href="${esc(p.source)}" target="_blank" rel="noopener">來源</a> `:''}${esc(p.effective?('生效 '+p.effective+'；'):'')}${esc(p.note||d.note||'')}</td></tr>`;}).join('');
+  $('cpiNote').innerHTML=`使用「${esc(L.cpi.base)} 以各年月為基期之消費者物價總指數（稅務專用）」，民國 48 年 1 月起。下次檢查 <span class="${due.has('cpi')?'bad':''}">${esc(L.cpi.nextCheck||'—')}${due.has('cpi')?' ⚠':''}</span>。${L.cpi.source?'來源：'+esc(L.cpi.source):''}`;
+  const n=libDue(LIB).length; $('dueList').innerHTML=n?`有 <b class="bad">${n}</b> 項參數到了檢查日：${libDue(LIB).map(x=>esc(x.label)).join('、')}。`:'所有參數都在有效期內。';
 }
 function setParam(k,v){ C.paramOverrides=C.paramOverrides||{}; if(v==='')delete C.paramOverrides[k]; else C.paramOverrides[k]=v; recalc(); }
 function cpiLookupUI(){ const v=cpiLookup($('cpiQ').value); $('cpiA').innerHTML=v==null?'<span class="hint">查無資料</span>':`<b>${v}</b>（調整倍數 ${(v/100).toFixed(3)}）`; }
+function saveLibSettings(){ const u=$('libUrl').value.trim(), k=$('libKey').value.trim();
+  if(u&&!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec/.test(u)){ alert('請貼上 Apps Script 網頁應用程式網址（https://script.google.com/macros/s/…/exec）'); return; }
+  u?localStorage.setItem(LS_URL,u):localStorage.removeItem(LS_URL); k?localStorage.setItem(LS_KEY,k):localStorage.removeItem(LS_KEY); libInit(); }
+function downloadLib(){ const b=new Blob([JSON.stringify(LIB,null,1)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=`params_v${LIB.version}.json`; a.click(); URL.revokeObjectURL(a.href); }
+function useLatestParams(){ FROZEN=null; C.paramsUsed=null; recalc(); flashStatus('✓ 已改用最新參數重算'); }
+
+// 更新提示詞 → Claude（開網路搜尋）→ 貼回 JSON → 檢查、對照 → 寫回參數庫
+const PARAM_SOURCES={
+  cpi:'行政院主計總處「消費者物價指數－稅務專用（以各年月為基期之消費者物價總指數）」最新一期',
+  houseSingle:'臺北市稅捐稽徵處：房屋稅稅率（房屋稅 2.0，本人、配偶、未成年子女全國僅持有一戶自住）',
+  houseSelf:'臺北市稅捐稽徵處：房屋稅自住住家用稅率',
+  houseNonSelf:'臺北市稅捐稽徵處：非自住住家用房屋稅率（依全國持有戶數累進，請一併列出各級）',
+  houseBiz:'臺北市稅捐稽徵處：營業用房屋稅率',
+  landProgStart:'臺北市稅捐稽徵處：當期地價稅累進起點地價',
+  stampRate:'印花稅法：典賣、讓受及分割不動產契據稅率與計稅基礎',
+  regFeeRate:'土地法第 76 條：登記費費率與計算基礎',
+};
+function buildUpdatePrompt(){
+  const due=libDue(LIB); if(!due.length)return '';
+  const lines=due.map(x=>{ const cur=x.key==='cpi'?`目前版本 ${LIB.cpi.base}`:`目前值 ${LIB.params[x.key].value}`;
+    return `- ${x.key}：${x.label}（${cur}）。查詢來源：${PARAM_SOURCES[x.key]||'全國法規資料庫或主管機關公告'}`; }).join('\n');
+  return `請用網路搜尋，到官方網站查詢下列台灣稅務參數的最新值。只採用政府網站（gov.tw）或全國法規資料庫的資料。
+${lines}
+
+最後只輸出一個 JSON 物件，不要輸出其他文字，格式如下：
+{
+  "params": {
+    "<參數代碼>": { "value": 數字, "source": "資料來源網址", "effective": "生效日（民國 YYY/MM/DD）", "note": "補充說明（例如累進各級稅率）" }
+  },
+  "cpi": { "base": "表的基準年月（民國 YYY/MM）", "source": "網址", "rows": { "48": [1月,…,12月], "49": […], …, "最後一年": [有資料的月份，其餘 null] } }
+}
+規則：
+1. 稅率一律寫小數（1.2% 寫 0.012，2‰ 寫 0.002）；金額寫元，不要千分位逗號。
+2. 每個值都要附 source 網址；查不到的參數整個不要出現，絕對不要猜。
+3. 沒有要更新 CPI 時，不要輸出 cpi。CPI 要把整張表從民國 48 年 1 月抄到最新月份，數字照表上抄（小數一位）。`;
+}
+let PU=null;
+function openParamUpdate(){ const p=buildUpdatePrompt(); $('puPrompt').textContent=p||'目前沒有到期的參數。'; $('puPaste').value=''; $('puTbl').innerHTML=''; $('puErr').textContent=''; $('puApply').style.display='none'; $('paramModal').style.display='block'; }
+async function copyUpdatePrompt(){ try{ await navigator.clipboard.writeText($('puPrompt').textContent); $('puCopyMsg').textContent='✓ 已複製'; }catch(_){ $('puCopyMsg').textContent='無法自動複製，請手動選取'; } }
+// 政府網站：*.gov.tw、*.gov.taipei（臺北市政府各機關）
+const isGov=u=>{ try{ const h=new URL(String(u)).hostname.toLowerCase(); return /(^|\.)gov\.tw$/.test(h)||/(^|\.)gov\.taipei$/.test(h); }catch(_){ return false; } };
+function validateCPI(nc){
+  const rows=nc&&nc.rows, errs=[], warns=[]; if(!rows)return {errs:['沒有 rows'],warns};
+  const ys=Object.keys(rows).map(Number).sort((a,b)=>a-b);
+  if(ys[0]!==48)errs.push('第一年不是民國 48 年');
+  for(let y=48;y<=ys.at(-1);y++){ const r=rows[y]; if(!Array.isArray(r)||r.length!==12){errs.push(`${y} 年不是 12 個月`);continue;}
+    if(y<ys.at(-1)&&r.some(v=>typeof v!=='number'))errs.push(`${y} 年有空白月份`); }
+  if(errs.length)return {errs,warns};
+  const ratios=[]; const old=LIB.cpi.table;
+  for(const y in old)(old[y]||[]).forEach((v,i)=>{ const n=rows[y]&&rows[y][i]; if(typeof v==='number'&&typeof n==='number')ratios.push({y,i,r:n/v}); });
+  const sorted=ratios.map(x=>x.r).sort((a,b)=>a-b), med=sorted[Math.floor(sorted.length/2)];
+  if(!(med>0.9&&med<1.1))errs.push(`新表與目前的表整體差異過大（中位數比值 ${med&&med.toFixed(4)}），可能抄錯表`);
+  const odd=ratios.filter(x=>Math.abs(x.r/med-1)>0.003);
+  if(odd.length)warns.push(`${odd.length} 格與整體比例不一致（可能抄錯）：`+odd.slice(0,8).map(x=>`${x.y}/${x.i+1}`).join('、')+(odd.length>8?'…':''));
+  return {errs,warns,med};
+}
+function parseParamUpdate(){
+  $('puErr').textContent=''; $('puTbl').innerHTML=''; $('puApply').style.display='none';
+  let txt=$('puPaste').value.trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim(); const s=txt.indexOf('{'),e=txt.lastIndexOf('}'); if(s>=0&&e>s)txt=txt.slice(s,e+1);
+  let d; try{ d=JSON.parse(txt); }catch(err){ $('puErr').textContent='JSON 格式錯誤：'+err.message; return; }
+  const rows=[];
+  for(const [k,v] of Object.entries(d.params||{})){
+    if(!PARAM_DEFS[k]){ rows.push({k,label:k,old:'',nw:'',ok:false,msg:'不認得的參數，略過'}); continue; }
+    const val=+v.value, def=PARAM_DEFS[k], msgs=[];
+    let ok=isFinite(val);
+    if(!ok)msgs.push('不是數字');
+    if(def.unit==='比率'&&!(val>=0&&val<=0.6)){ok=false;msgs.push('比率超出 0～0.6，可能沒換成小數');}
+    if(def.unit==='年'&&!(Number.isInteger(val)&&val>=0&&val<=20)){ok=false;msgs.push('年數不合理');}
+    if(!v.source){ok=false;msgs.push('沒有來源網址');} else if(!isGov(v.source))msgs.push('⚠ 來源不是政府網站，請確認');
+    const old=LIB.params[k]&&LIB.params[k].value;
+    if(ok&&old>0&&Math.abs(val/old-1)>0.5)msgs.push('⚠ 與目前值相差超過 50%');
+    rows.push({k,label:def.label,old,nw:val,src:v.source,eff:v.effective||'',note:v.note||'',ok,def:ok,msg:msgs.join('；')});
+  }
+  if(d.cpi){ const V=validateCPI(d.cpi); const ok=!V.errs.length;
+    rows.push({k:'cpi',label:'消費者物價指數（稅務專用）',old:LIB.cpi.base,nw:d.cpi.base,src:d.cpi.source,cpi:d.cpi,ok,def:ok&&!V.warns.length,msg:[...V.errs,...V.warns,!isGov(d.cpi.source)?'⚠ 來源不是政府網站':''].filter(Boolean).join('；')}); }
+  if(!rows.length){ $('puErr').textContent='沒有可更新的參數'; return; }
+  PU=rows;
+  $('puTbl').innerHTML='<tr><th>套用</th><th>參數</th><th class="n">目前</th><th class="n">新值</th><th>來源／檢查</th></tr>'+rows.map((r,i)=>`<tr><td>${r.ok?`<input type="checkbox" id="pu${i}"${r.def?' checked':''}>`:''}</td><td>${esc(r.label)}</td><td class="n">${esc(r.old)}</td><td class="n"><b>${esc(r.nw)}</b></td><td style="font-size:12px">${r.src?`<a href="${esc(r.src)}" target="_blank" rel="noopener">${esc(r.src).slice(0,60)}</a>`:''}${r.eff?'｜生效 '+esc(r.eff):''}${r.note?'<br>'+esc(r.note):''}${r.msg?`<br><span class="${r.ok?'warn':'bad'}">${esc(r.msg)}</span>`:''}</td></tr>`).join('');
+  $('puApply').style.display='';
+}
+const ymd=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; // 本地日期，避免時區差一天
+function nextMonth10(){ const d=new Date(); return ymd(new Date(d.getFullYear(),d.getMonth()+1,10)); }
+function nextYear(){ const d=new Date(); return ymd(new Date(d.getFullYear()+1,d.getMonth(),d.getDate())); }
+async function applyParamUpdate(){
+  if(!PU)return; const N=JSON.parse(JSON.stringify(LIB)); let n=0;
+  PU.forEach((r,i)=>{ const cb=$('pu'+i); if(!r.ok||!cb||!cb.checked)return; n++;
+    if(r.k==='cpi'){ N.cpi={base:r.cpi.base,table:r.cpi.rows,source:r.cpi.source||'',nextCheck:nextMonth10()}; }
+    else N.params[r.k]={value:r.nw,verified:isGov(r.src),source:r.src,effective:r.eff,nextCheck:nextYear(),note:r.note}; });
+  if(!n){ alert('沒有勾選任何項目'); return; }
+  N.version=(LIB.version||0)+1; N.updatedAt=new Date().toLocaleString('zh-TW');
+  const url=localStorage.getItem(LS_URL), key=localStorage.getItem(LS_KEY);
+  if(url&&key){
+    try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'save',key,params:N})}); const d=await r.json();
+      if(!d.ok)throw new Error(d.error||'寫入失敗'); }catch(err){ alert('寫回雲端失敗：'+err.message+'\n已先存在這台裝置，並下載 params.json 備份。'); LIB=N; localStorage.setItem(LS_CACHE,JSON.stringify(N)); downloadLib(); finishPU(n); return; }
+    LIB=N; localStorage.setItem(LS_CACHE,JSON.stringify(N)); finishPU(n,'已寫回雲端參數庫');
+  } else { LIB=N; localStorage.setItem(LS_CACHE,JSON.stringify(N)); downloadLib(); finishPU(n,'未設定雲端：已存在這台裝置並下載 params.json'); }
+}
+function finishPU(n,msg){ $('paramModal').style.display='none'; PU=null; recalc(); renderDueBadge(); flashStatus(`✓ 參數庫更新為 v${LIB.version}（${n} 項）${msg?'；'+msg:''}`); }
 
 // 儲存／載入
 function saveProject(){
   recalc();
-  const data=JSON.parse(JSON.stringify(C)); data.version=SAVE_VERSION; data.savedAt=new Date().toISOString(); data.cpiVersion=CPI_BASE;
+  const data=JSON.parse(JSON.stringify(C)); data.version=SAVE_VERSION; data.savedAt=new Date().toISOString();
+  data.paramsUsed=JSON.parse(JSON.stringify(activeLib())); // 舊案重開時照當時參數計算
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
   a.download=(C.name||'稅費試算').replace(/[/\\:*?"<>|]/g,'_')+'_稅費_'+new Date().toLocaleDateString('zh-TW').replace(/\//g,'')+'.json';
@@ -643,7 +848,224 @@ function loadData(d){
   const base=newCase();
   C=Object.assign(base,d,{reliefs:Object.assign(base.reliefs,d.reliefs),dates:Object.assign(base.dates,d.dates),allocation:Object.assign(base.allocation,d.allocation),prices:Object.assign(base.prices,d.prices)});
   C.owners.forEach(o=>{ if(!o.id)o.id=nid(); });
+  FROZEN=(d.paramsUsed&&d.paramsUsed.schema==='tax-params-1'&&d.paramsUsed.version!==LIB.version)?d.paramsUsed:null;
+  delete C.paramsUsed;
   bindCase(); RES=null; recalc(); renderOwners(); recalc();
+  if(FROZEN)flashStatus(`本案沿用存檔時的參數 v${FROZEN.version}（最新 v${LIB.version}），可在 ⑤ 改用最新`);
+}
+
+// ════════════════════════════════════════════════════════════════
+// 個人說明文件（A4 列印）與手機圖卡
+// ════════════════════════════════════════════════════════════════
+const DEV_NAME={'urban-agreement':'都市更新・協議合建','urban-rights':'都市更新・權利變換','danger':'危老重建','general':'一般合建'};
+function explain(key){
+  const RI=RES.RI,P=RES.P,t=C.devType;
+  const rr=pct(P.reliefRate), hy=P.halfYears;
+  switch(key){
+    case 'lvt': return '您換給建商的那部分土地，依漲價多寡課土地增值稅。'+(RI.agreeRelief?`都更協議合建可減徵 ${rr}。`:'');
+    case 'deed': return '換回的新房屋（含車位）要繳契稅，以房屋評定現值的 2% 計。'+(RI.agreeRelief?`都更協議合建可減徵 ${rr}。`:'');
+    case 'vat': return C.prices.vatPayer==='owner'?'建商把房屋換給您，房屋部分視同銷售，要繳 5% 營業稅；依合約由地主負擔。':'依合約由建商負擔。';
+    case 'stamp': return '產權移轉契約要貼的印花稅（約千分之一）。';
+    case 'reg': return '地政事務所辦理登記的規費（約千分之一）。';
+    case 'misc': return '代書費等辦理產權移轉的雜支。';
+    case 'landBuild': return RI.buildLand===0?'興建期間土地無法使用，地價稅免徵。':RI.buildLand===0.5?'興建期間土地仍可使用，地價稅減半。':'興建期間地價稅照常繳納。';
+    case 'landPost': return `完工後每年繳地價稅（以您保留的土地持分計）。`+(RI.halfOk?`前 ${hy} 年減半。`:'');
+    case 'housePost': return '完工後每年繳房屋稅。'+(RI.halfOk?`前 ${Math.max(hy,RI.houseExtYears)} 年減半${RI.houseExtYears?'（期間內未移轉）':''}。`:'');
+  }
+  return '';
+}
+function ownerOf(id){ return C.owners.find(o=>o.id===id)||{}; }
+function docHTML(R){
+  const o=ownerOf(R.id), t=R.tot, D=C.dates;
+  const rows=grp=>R.items.filter(it=>it.grp===grp).map(it=>`<tr><td>${esc(it.label)}</td><td class="n">${fmtI(it.g)}</td><td class="n"><b>${fmtI(it.r)}</b></td><td class="ex">${esc(explain(it.key))}</td></tr>`).join('');
+  const sub=(lbl,x)=>`<tr class="tot"><td>${lbl}</td><td class="n">${fmtI(x.g)}</td><td class="n">${fmtI(x.r)}</td><td></td></tr>`;
+  const ests=[];
+  if(D.transferDate)ests.push(`土地移轉日 ${D.transferDate}`); if(D.buildEnd)ests.push(`完工交屋日 ${D.buildEnd}`);
+  const annY=[...new Set((C.parcels||[]).map(p=>p.annYear).filter(Boolean))].join('、');
+  return `<div class="doc">
+    <h1>都更合建 稅費試算說明</h1>
+    <div class="meta">${esc(C.name||'')}｜所有權人：<b>${esc(o.name||'')}</b>${o.address?'｜'+esc(o.address):''}<br>試算基準日 ${esc(D.calcDate||'')}｜開發方式：${DEV_NAME[C.devType]||''}</div>
+    <div class="big">參加合建，預估您要負擔的稅費約 <b>${fmtI(t.all.r)}</b> 元${t.all.g-t.all.r>0.5?`<br>因適用都更減免，比一般情況少繳約 <b>${fmtI(t.all.g-t.all.r)}</b> 元`:''}</div>
+    <div class="meta">原土地持分 ${fmt2(R.land.ownArea)} ㎡；分回房屋 ${fmt2(R.land.salePing)} 坪；保留土地 ${fmt2(R.land.retainArea)} ㎡、換給建商 ${fmt2(R.land.ownArea-R.land.retainArea)} ㎡。</div>
+    <h2>① 因合建產生（一次性）</h2>
+    <table><tr><th>項目</th><th class="n">一般</th><th class="n">適用減免後</th><th>說明</th></tr>${rows('build')}${sub('小計',t.build)}</table>
+    <h2>② 因持有產生（興建期間與完工後 ${RES.postYears} 年）</h2>
+    <table><tr><th>項目</th><th class="n">一般</th><th class="n">適用減免後</th><th>說明</th></tr>${rows('hold')}${sub('小計',t.hold)}</table>
+    <table style="margin-top:8px"><tr class="tot"><td>合計</td><td class="n">${fmtI(t.all.g)}</td><td class="n">${fmtI(t.all.r)}</td><td class="ex">少繳 ${fmtI(t.all.g-t.all.r)} 元</td></tr></table>
+    <div class="foot">
+      <b>試算前提</b>：${RES.RI.lines.map(esc).join('；')}。${ests.length?'預估日期：'+ests.join('、')+'。':''}${annY?`公告現值採 ${esc(annY)} 年。`:''}物價指數採 ${cpiBase()} 稅務專用表。<br>
+      ※ 本表僅供預估參考，實際稅費依產權移轉當時之稅令規定及主管機關核定為準；前次移轉現值以稅捐稽徵機關核算者為準。
+    </div>
+  </div>`;
+}
+function printDocs(ids){
+  recalc();
+  const list=ids.map(id=>RES.owners.find(x=>x.id===id)).filter(R=>R&&!R.skip&&R.tot);
+  if(!list.length){alert('沒有可列印的所有權人');return;}
+  $('printArea').innerHTML=list.map(docHTML).join('');
+  setTimeout(()=>window.print(),50);
+}
+// 圖卡 1080×1350（LINE／手機）
+function downloadCard(id){
+  recalc();
+  const R=RES.owners.find(x=>x.id===id); if(!R||R.skip||!R.tot){alert('請先選擇要試算的所有權人');return;}
+  const o=ownerOf(id), W=1080,H=1350, cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+  const g=cv.getContext('2d'), FF='"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif';
+  const T=(s,x,y,sz,col,wt,al)=>{g.font=`${wt||400} ${sz}px ${FF}`;g.fillStyle=col||'#222';g.textAlign=al||'left';g.fillText(s,x,y);};
+  g.fillStyle='#fff';g.fillRect(0,0,W,H);
+  g.fillStyle='#0F6E75';g.fillRect(0,0,W,190);
+  T('都更合建 稅費試算',60,88,52,'#fff',700);
+  T(`${C.name||''}`.slice(0,30),60,150,30,'#d8eeee');
+  T(`所有權人　${o.name||''}`,60,262,40,'#222',700);
+  g.fillStyle='#E3F1F2';g.beginPath();g.roundRect(50,300,W-100,190,20);g.fill();
+  T('預估負擔稅費',90,360,32,'#0F6E75',600);
+  T(fmtI(R.tot.all.r)+' 元',W-90,440,72,'#0F6E75',700,'right');
+  if(R.tot.all.g-R.tot.all.r>0.5)T(`適用減免，少繳約 ${fmtI(R.tot.all.g-R.tot.all.r)} 元`,90,470,28,'#2e7d32',600);
+  let y=560;
+  const sec=(title,grp,tot)=>{ T(title,60,y,32,'#0F6E75',700); y+=16; g.fillStyle='#cfdcdc';g.fillRect(60,y,W-120,2); y+=46;
+    R.items.filter(it=>it.grp===grp&&it.r>0.5).forEach(it=>{ T(it.label,80,y,30,'#333'); T(fmtI(it.r),W-80,y,30,'#222',600,'right'); y+=44; });
+    T('小計',80,y,30,'#0F6E75',700); T(fmtI(tot.r),W-80,y,30,'#0F6E75',700,'right'); y+=64; };
+  sec('① 因合建產生（一次性）','build',R.tot.build);
+  sec(`② 因持有產生（含完工後 ${RES.postYears} 年）`,'hold',R.tot.hold);
+  T(`試算基準日 ${C.dates.calcDate||''}｜${DEV_NAME[C.devType]||''}`,60,H-90,24,'#666');
+  T('本表僅供預估參考，實際稅費依產權移轉當時稅令及主管機關核定為準',60,H-50,24,'#888');
+  cv.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=`${(o.name||'所有權人').replace(/[/\\:*?"<>|]/g,'_')}_稅費試算.png`; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); },'image/png');
+  return cv;
+}
+
+// ════════════════════════════════════════════════════════════════
+// 謄本／稅單／地政雲端：提示詞 → AI 回 JSON → 貼回預覽 → 套用
+// ════════════════════════════════════════════════════════════════
+const DOC_PROMPT_VER='doc-1';
+const DOC_PROMPT=`你是台灣地政資料整理助手。我會附上一份或多份檔案（土地登記謄本、建物登記謄本、房屋稅單、地價稅單、地政網站地號查詢截圖），可能是 PDF 或圖片。
+請逐份判斷類型並抄出指定欄位，最後只輸出一個 JSON 陣列（每份檔案一個物件，依檔案順序），不要輸出任何其他文字。
+
+類型 land（土地登記謄本）：
+- type："land"
+- lot：地段地號，寫成「段名＋小段＋母號-子號」，例如「瑞安段三小段0311-0000」
+- district：行政區，例如「大安區」
+- area_m2：土地標示部的面積（平方公尺）
+- ann：公告土地現值（元／平方公尺）；ann_ym：公告土地現值的年月
+- buildings：地上建物建號陣列，例如 ["00486-000","00487-000"]
+- owners：土地所有權部每一位所有權人一個物件：
+  - order：登記次序
+  - name：所有權人，照抄（含遮蔽符號＊）
+  - id：統一編號，照抄（含遮蔽符號＊）
+  - address：住址
+  - reg_date：登記日期
+  - cause：登記原因，照抄（例如 買賣、分割繼承、配偶贈與、贈與、拍賣）
+  - cause_date：原因發生日期
+  - share：權利範圍，寫成「分子/分母」。謄本寫「656分之93」就寫 "93/656"；「全部 1分之1」寫 "1/1"
+  - declared_lp：當期申報地價（元／平方公尺）；declared_ym：當期申報地價的年月
+  - tranches：「前次移轉現值或原規定地價」每一組一個物件 {"ym":"076/03","value":47500,"share":"93/656"}，share 是該組下方的「歷次取得權利範圍」
+- 土地他項權利部（抵押權等）不要抄。
+
+類型 building（建物登記謄本）：
+- type："building"
+- bno：建號，含段名，例如「瑞安段三小段00487-000」
+- door：建物門牌；lot：建物坐落地號
+- use：主要用途；material：主要建材；floors：層數（數字）；floor：層次（照抄，例如「一層」）
+- area_m2：總面積；attach_m2：附屬建物面積合計（沒有填 null）
+- completed：建築完成日期
+- owners：[{ "name", "id", "address", "reg_date", "cause", "share" }]，規則同上
+
+類型 house_tax（房屋稅繳款書）：type、door（房屋坐落）、year（課稅年度）、value（課稅現值，元）、rate_text（稅率或稅率類別原文，例如「自住 1.2%」）、tax（應納稅額）
+類型 land_tax（地價稅繳款書）：type、year、lots（地號陣列）、taxable_value（課稅地價總額，元）、rate_text（稅率原文，例如「自用住宅用地 2‰」）、tax
+類型 parcel（地政網站的單一地號查詢畫面）：type、lot、area_m2、ann（公告現值）、ann_ym、lp（公告地價）、lp_ym
+都不是：{"type":"unknown"}
+
+規則：
+1. 數字照抄，去掉千分位逗號、星號與單位；不換算、不四捨五入、不推估。
+2. 看不到或看不清楚的欄位填 null，絕對不要猜。
+3. 日期一律寫民國年，格式 "YYY/MM/DD" 或 "YYY/MM"，年份補滿三位（例如 "076/05/25"）。
+4. 姓名、統一編號照文件上的遮蔽樣子抄，不要補全或猜測。
+5. 單位不是平方公尺或元／平方公尺（例如坪、元／坪）時，該欄填 null。`;
+let DI=null;
+function openDocImport(){ $('docPromptPre').textContent=DOC_PROMPT; $('docErr').textContent=''; $('docTbl').innerHTML=''; $('docApplyBtn').style.display='none'; $('docModal').style.display='block'; }
+async function copyDocPrompt(){ try{ await navigator.clipboard.writeText(DOC_PROMPT); $('docCopyMsg').textContent='✓ 已複製'; }catch(_){ $('docCopyMsg').textContent='無法自動複製，請展開下方內容手動複製'; } }
+function parseShare(s){ const m=String(s||'').replace(/\s/g,'').match(/^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/); if(m)return {num:+m[1],den:+m[2]}; const m2=String(s||'').match(/(\d+)分之(\d+)/); return m2?{num:+m2[2],den:+m2[1]}:null; }
+const rocY=s=>{ const m=String(s||'').match(/^(\d{2,3})/); return m?String(+m[1]):''; };
+const normYM=s=>{ const p=parseROCym(s); return p?String(p.y).padStart(3,'0')+'/'+String(p.m).padStart(2,'0'):''; };
+function findOwnerBy(name,id){
+  const first=String(name||'').charAt(0);
+  return C.owners.find(o=>id&&o.idMasked&&o.idMasked===id&&String(o.name||'').charAt(0)===first)
+      || C.owners.find(o=>name&&o.name===name);
+}
+function parseDocImport(){
+  $('docErr').textContent=''; $('docTbl').innerHTML=''; $('docApplyBtn').style.display='none';
+  let txt=$('docPaste').value.trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
+  const s=txt.indexOf('['), e=txt.lastIndexOf(']'); if(s>=0&&e>s)txt=txt.slice(s,e+1);
+  let arr; try{ arr=JSON.parse(txt); }catch(err){ $('docErr').textContent='JSON 格式錯誤：'+err.message; return; }
+  if(!Array.isArray(arr))arr=[arr];
+  const acts=[]; // {label, detail, def, run(ctx)}
+  const pendingOwners={}; // key → 新所有權人（同一批多份謄本合併）
+  const okey=(name,id)=>(id||'')+'|'+String(name||'').charAt(0);
+  const ownerRef=(name,id,address)=>{ const ex=findOwnerBy(name,id); if(ex)return {get:()=>ex,isNew:false};
+    const k=okey(name,id); if(!pendingOwners[k]){ pendingOwners[k]={name,idMasked:id||'',address:address||''};
+      acts.push({label:`新增所有權人 ${esc(name)}`,detail:`${esc(id||'')}｜${esc(address||'')}`,def:true,run:()=>{ if(!pendingOwners[k].obj){ const o={id:nid(),name,idMasked:id||'',address:address||'',households:'',lvtSelf:'none',landSelfUse:false,skip:false,retainOverride:'',scrivener:'',lands:[],units:[],buildings:[]}; C.owners.push(o); pendingOwners[k].obj=o; } }}); }
+    return {get:()=>pendingOwners[k].obj||findOwnerBy(name,id),isNew:true}; };
+  let unknown=0;
+  for(const d of arr){
+    const t=d&&d.type;
+    if(t==='land'||t==='parcel'){
+      const lot=String(d.lot||'').trim(); if(!lot){unknown++;continue;}
+      const ex=C.parcels.find(p=>p.lot===lot);
+      const val={area:d.area_m2??'',ann:d.ann??'',annYear:rocY(d.ann_ym),lp:d.lp??(ex?ex.lp:''),lpYear:d.lp_ym?rocY(d.lp_ym):(ex?ex.lpYear:'')};
+      if(!ex) acts.push({label:`新增地號 ${esc(lot)}`,detail:`面積 ${fmt2(val.area)} ㎡｜公告現值 ${val.ann===''?'—':fmtI(val.ann)}（${esc(d.ann_ym||'')}）${t==='parcel'?`｜公告地價 ${val.lp===''?'—':fmtI(val.lp)}`:''}`,def:true,run:()=>{ if(!C.parcels.find(p=>p.lot===lot))C.parcels.push(Object.assign({lot},val)); }});
+      else acts.push({label:`更新地號 ${esc(lot)}`,detail:`面積 ${fmt2(ex.area)}→${fmt2(val.area)}｜現值 ${fmtI(ex.ann)}→${val.ann===''?'—':fmtI(val.ann)}`,def:String(ex.ann)!==String(val.ann)||String(ex.area)!==String(val.area),run:()=>{ const p=C.parcels.find(x=>x.lot===lot); Object.keys(val).forEach(k=>{ if(val[k]!==''&&val[k]!=null)p[k]=val[k]; }); }});
+      if(t==='land') for(const w of (d.owners||[])){
+        const ref=ownerRef(w.name,w.id,w.address);
+        const trs=(w.tranches&&w.tranches.length)?w.tranches:[{ym:null,value:null,share:w.share}];
+        for(const tr of trs){
+          const sh=parseShare(tr.share)||parseShare(w.share)||{num:'',den:''};
+          const rec={lot,num:sh.num,den:sh.den,cause:w.cause||'',prevYM:normYM(tr.ym),prevValue:tr.value??'',holdStart:'',declaredLP:w.declared_lp??'',improve:'',regDate:w.reg_date||'',causeDate:w.cause_date||''};
+          const dup=()=>{ const o=ref.get(); return o&&(o.lands||[]).some(x=>x.lot===lot&&x.prevYM===rec.prevYM&&+x.num===+rec.num&&+x.den===+rec.den); };
+          const ex0=!ref.isNew&&dup();
+          acts.push({label:`${esc(w.name)}：取得紀錄 ${esc(lot)}`,detail:`${esc(rec.cause)}｜前次移轉 ${esc(rec.prevYM||'—')} ${rec.prevValue===''?'—':fmtI(rec.prevValue)} 元/㎡｜持分 ${sh.num}/${sh.den}｜申報地價 ${rec.declaredLP===''?'—':fmtI(rec.declaredLP)}${!tr.ym?'<br><b class="bad">謄本未列前次移轉現值，請手動補</b>':''}${ex0?'<br><span class="hint">已有相同紀錄</span>':''}`,def:!ex0,
+            run:()=>{ const o=ref.get(); if(!o||dup())return; (o.lands=o.lands||[]).push(Object.assign({},rec)); if(!o.address&&w.address)o.address=w.address; if(!o.idMasked&&w.id)o.idMasked=w.id; }});
+        }
+      }
+    } else if(t==='building'){
+      for(const w of (d.owners||[])){
+        const ref=ownerRef(w.name,w.id,w.address);
+        const b={bno:d.bno||'',door:d.door||'',lot:d.lot||'',use:d.use||'',material:d.material||'',floors:d.floors??'',floor:d.floor||'',area_m2:d.area_m2??'',attach_m2:d.attach_m2??'',completed:d.completed||'',share:w.share||'',cause:w.cause||'',regDate:w.reg_date||''};
+        const hasB=!ref.isNew&&((ref.get()||{}).buildings||[]).some(x=>x.bno===b.bno);
+        acts.push({label:`${esc(w.name)}：舊建物 ${esc(b.bno)}`,detail:`${esc(b.door)}｜${esc(b.use)}｜${fmt2(b.area_m2)} ㎡｜持分 ${esc(b.share)}｜建築完成 ${esc(b.completed)}${hasB?'<br><span class="hint">已匯入過</span>':''}`,def:!hasB,
+          run:()=>{ const o=ref.get(); if(!o)return; o.buildings=o.buildings||[]; if(!o.buildings.some(x=>x.bno===b.bno))o.buildings.push(b); }});
+      }
+    } else if(t==='house_tax'||t==='land_tax'){
+      const ev=Object.assign({},d), sig=JSON.stringify(ev), has=()=>(C.evidence||[]).some(x=>JSON.stringify(x)===sig);
+      acts.push({label:t==='house_tax'?`房屋稅單 ${esc(d.door||'')}`:`地價稅單 ${esc((d.lots||[]).join('、'))}`,detail:`${esc(d.year||'')} 年｜${t==='house_tax'?'課稅現值 '+fmtI(d.value):'課稅地價 '+fmtI(d.taxable_value)}｜${esc(d.rate_text||'')}｜稅額 ${fmtI(d.tax)}${has()?'<br><span class="hint">已匯入過</span>':''}`,def:!has(),
+        run:()=>{ if(!has())(C.evidence=C.evidence||[]).push(ev); }});
+    } else unknown++;
+  }
+  if(unknown)acts.push({label:`略過 ${unknown} 份`,detail:'類型無法判斷或缺少地號',def:false,run:null});
+  if(!acts.length){ $('docErr').textContent='沒有可匯入的資料'; return; }
+  DI=acts;
+  $('docTbl').innerHTML='<tr><th>套用</th><th>項目</th><th>內容</th></tr>'+acts.map((a,i)=>`<tr><td>${a.run?`<input type="checkbox" id="di${i}"${a.def?' checked':''}>`:''}</td><td>${a.label}</td><td style="font-size:12.5px">${a.detail}</td></tr>`).join('');
+  $('docApplyBtn').style.display='';
+}
+function applyDocImport(){
+  if(!DI)return; let n=0;
+  DI.forEach((a,i)=>{ const cb=$('di'+i); if(a.run&&cb&&cb.checked){ a.run(); n++; } });
+  // 自動清掉新所有權人預設的空白分回單元以外的東西：不需要
+  C.source=Object.assign(C.source||{},{docPrompt:DOC_PROMPT_VER});
+  $('docModal').style.display='none'; DI=null; $('docPaste').value='';
+  bindCase(); recalc(); renderOwners(); recalc();
+  flashStatus(`✓ 已套用 ${n} 項；請補全姓名、確認分回單元`);
+}
+// 所有權人卡片的參考資料：舊建物、稅單、自用住宅線索
+function ownerRefHTML(o){
+  const bs=o.buildings||[]; const out=[];
+  const nz=s=>String(s||'').replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).replace(/[\s　]/g,'').replace(/台/g,'臺');
+  bs.forEach(b=>{ const self=o.address&&b.door&&nz(o.address).includes(nz(b.door));
+    out.push(`舊建物 ${esc(b.bno)}｜${esc(b.door)}｜${esc(b.use)} ${fmt2(b.area_m2)} ㎡｜持分 ${esc(b.share)}${self?' <span class="pill est">住址與門牌相同，可能符合自用住宅</span>':''}`); });
+  const doors=bs.map(b=>String(b.door||'').replace(/\s/g,'')).filter(Boolean), lots=(o.lands||[]).map(l=>l.lot);
+  (C.evidence||[]).forEach(ev=>{
+      if(ev.type==='house_tax'&&doors.some(d=>String(ev.door||'').replace(/\s/g,'').includes(d)))out.push(`房屋稅單 ${esc(ev.year||'')}｜${esc(ev.rate_text||'')}｜課稅現值 ${fmtI(ev.value)}`);
+    if(ev.type==='land_tax'&&(ev.lots||[]).some(l=>lots.includes(l)))out.push(`地價稅單 ${esc(ev.year||'')}｜${esc(ev.rate_text||'')}｜課稅地價 ${fmtI(ev.taxable_value)}`);
+  });
+  return out.length?`<div class="hint" style="margin:6px 0">${out.join('<br>')}</div>`:'';
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -666,11 +1088,15 @@ function buildQuick(d,fname){
   add('name','案名',C.name,I['f-name']||d.projectName,!C.name,v=>C.name=v);
   const cityMap={taipei:'台北市',newtaipei:'新北市',other:'其他'};
   add('city','縣市',C.city,cityMap[I['f-city']],false,v=>C.city=v);
-  const a=qsNum(I['f-area']); const aM2=a==null?null:+(I['f-unit']==='m2'?a:a*P2M).toFixed(2);
-  add('siteArea','基地面積（㎡）',C.allocation.siteArea,aM2,!num(C.allocation.siteArea),v=>C.allocation.siteArea=v,I['f-unit']==='m2'?'':`速算填 ${a} 坪，已換算`);
+  const RS=d.results&&d.results.forTool==='urban-renewal-tax'?d.results:null;
+  const a=qsNum(I['f-area']); let aM2=a==null?null:+(I['f-unit']==='m2'?a:a*P2M).toFixed(2);
+  let aNote=I['f-unit']==='m2'?'':`速算填 ${a} 坪，已換算`;
+  if(RS&&RS.urbanSitePing>0&&Math.abs(RS.urbanSitePing-RS.sitePing)>0.01){ aM2=+(RS.urbanSitePing*P2M).toFixed(2); aNote=`都更合建部分 ${fmt2(RS.urbanSitePing)} 坪（全基地 ${fmt2(RS.sitePing)} 坪）`; }
+  add('siteArea','基地面積（㎡）',C.allocation.siteArea,aM2,!num(C.allocation.siteArea),v=>C.allocation.siteArea=v,aNote);
+  if(RS) add('totalSale','全案總銷坪（坪）',C.allocation.totalSalePing,+RS.totalSalePing.toFixed(2),true,v=>C.allocation.totalSalePing=v,'速算都更合建總銷坪');
   add('unitPrice','選屋單價（萬／坪）',C.prices.unitPrice,qsNum(I['s2-pprice']),true,v=>C.prices.unitPrice=v);
   add('carPrice','車位單價（萬／位，平面）',C.prices.carPrice,qsNum(I['s2-cprice']),true,v=>C.prices.carPrice=v);
-  const payer=I['s2-swap-payer']||'builder'; // 速算檔沒存時＝速算預設「建商負擔」
+  const payer=(RS&&RS.swapPayer)||I['s2-swap-payer']||'builder'; // 速算檔沒存時＝速算預設「建商負擔」
   const pMap={owner:'owner',builder:'builder',off:'builder'};
   add('vatPayer','互易營業稅負擔',C.prices.vatPayer==='owner'?'地主':'建商',payer?(payer==='owner'?'地主':payer==='off'?'建商（速算設為不計）':'建商'):null,true,()=>C.prices.vatPayer=pMap[payer]||'builder');
   add('hl','房地比（房屋占比 %）',C.prices.hlRatioManual||'自動計算',qsNum(I['s2-house']),false,v=>C.prices.hlRatioManual=v,'速算為手動值；不勾選＝維持本工具自動計算');
@@ -682,19 +1108,34 @@ function buildQuick(d,fname){
   const newP=parcels.filter(p=>!have.has(p.lot)), updP=parcels.filter(p=>have.has(p.lot));
   if(newP.length) add('parcelsNew',`新增地號 ${newP.length} 筆`,'',newP.map(p=>`${esc(p.lot)}（${fmt2(p.area)}㎡、現值 ${p.ann===''?'—':fmtI(p.ann)}、地價 ${p.lp===''?'—':fmtI(p.lp)}）`).join('<br>'),true,()=>C.parcels.push(...newP));
   if(updP.length) add('parcelsUpd',`更新既有地號 ${updP.length} 筆的面積、公告現值、公告地價`,'',updP.map(p=>esc(p.lot)).join('、'),false,()=>updP.forEach(p=>{const q=C.parcels.find(x=>x.lot===p.lot); Object.assign(q,{area:p.area,ann:p.ann,lp:p.lp});}));
-  // 地主名單
+  // 地主名單＋分回（有 results 時帶入分回房屋與車位）
+  const parkPing=qsNum(I['f-parksize'])||12;      // 速算每車位面積（坪），預設 12
+  const resOf=name=>RS?(RS.owners||[]).find(r=>r.name===name):null;
+  const unitsOf=r=>{ if(!r)return [{kind:'house',ping:'',priceWan:'',use:'home',self:'no'}];
+    const us=[{kind:'house',ping:+r.salePing.toFixed(2),priceWan:+(r.salePing*RS.pricePing).toFixed(1),use:'home',self:'no'}];
+    const nc=(r.carPlanar||0)+(r.carMech||0);
+    if(nc>0.0001) us.push({kind:'car',ping:+(nc*parkPing).toFixed(2),priceWan:+((r.carPlanar||0)*RS.priceCar+(r.carMech||0)*RS.priceMech).toFixed(1),cars:+nc.toFixed(3),use:'home',self:'no'});
+    return us; };
+  const fmtRes=r=>r?`：分回 ${fmt2(r.salePing)} 坪${(r.carPlanar+r.carMech)>0.0001?`、車位 ${fmt2(r.carPlanar+r.carMech)} 位`:''}`:'';
   const names=new Set(C.owners.map(o=>o.name));
   const qo=(d.owners||[]).filter(o=>o&&o.name&&o.name!=='公有土地');
   const newO=qo.filter(o=>!names.has(o.name));
-  if(newO.length) add('owners',`新增所有權人 ${newO.length} 位`,'',newO.map(o=>`${esc(o.name)}（速算土地 ${fmt2(o.landPing)} 坪）`).join('、'),true,
-    ()=>newO.forEach(o=>C.owners.push({id:nid(),name:o.name,idMasked:'',address:'',households:'',lvtSelf:'none',landSelfUse:false,skip:false,retainOverride:'',scrivener:'',qsLandPing:o.landPing,lands:[],units:[{kind:'house',ping:'',priceWan:'',use:'home',self:'no'}]})),
-    '只帶姓名；共有、一人多戶請自行調整');
+  if(newO.length) add('owners',`新增所有權人 ${newO.length} 位`,'',newO.map(o=>`${esc(o.name)}（速算土地 ${fmt2(o.landPing)} 坪${fmtRes(resOf(o.name))}）`).join('<br>'),true,
+    ()=>newO.forEach(o=>C.owners.push({id:nid(),name:o.name,idMasked:'',address:'',households:'',lvtSelf:'none',landSelfUse:false,skip:false,retainOverride:'',scrivener:'',qsLandPing:o.landPing,lands:[],units:unitsOf(resOf(o.name))})),
+    RS?'帶入姓名與分回房屋、車位；共有、一人多戶請自行調整':'只帶姓名；共有、一人多戶請自行調整');
   const oldO=qo.filter(o=>names.has(o.name));
   if(oldO.length) add('ownersRef',`既有所有權人 ${oldO.length} 位：記下速算土地坪數供核對`,'',oldO.map(o=>esc(o.name)).join('、'),true,()=>oldO.forEach(o=>{const x=C.owners.find(y=>y.name===o.name); if(x)x.qsLandPing=o.landPing;}));
+  const updU=RS?oldO.filter(o=>resOf(o.name)):[];
+  if(updU.length){ const empty=updU.every(o=>{const x=C.owners.find(y=>y.name===o.name); return !(x.units||[]).some(u=>num(u.ping)>0);});
+    add('ownersUnits',`既有所有權人 ${updU.length} 位：以速算結果取代分回單元`,'',updU.map(o=>esc(o.name)+fmtRes(resOf(o.name))).join('<br>'),empty,
+      ()=>updU.forEach(o=>{const x=C.owners.find(y=>y.name===o.name); const keep=(x.units||[])[0]||{}; x.units=unitsOf(resOf(o.name)).map((u,k)=>k===0?Object.assign(u,{use:keep.use||'home',self:keep.self||'no',premium:keep.premium||''}):u);}),
+      '會保留原本第一戶的用途、自住、加價率設定'); }
+  if(RS) rows.push({id:'carNote',label:'車位面積',cur:'',val:`以速算每車位 ${parkPing} 坪估算評定現值（可在 ② 修改）`,def:false,apply:null});
   if((d.owners||[]).some(o=>o&&o.name==='公有土地')) rows.push({id:'pubNote',label:'公有土地',cur:'',val:'速算有「公有土地」地主，未匯入（第一期不試算公有）',def:false,apply:null});
   QS={rows,src:{file:fname,savedAt:d.savedAt||'',version:d.version||''}};
   $('qsSrc').textContent=`來源：${fname}${d.savedAt?'（速算存檔 '+new Date(d.savedAt).toLocaleString('zh-TW')+'）':''}。預設只勾選目前空白或建議帶入的欄位，已有的值不會被覆蓋。`;
-  $('qsTbl').innerHTML='<tr><th>套用</th><th>項目</th><th>目前</th><th>速算</th></tr>'+rows.map((r,i)=>`<tr><td>${r.apply?`<input type="checkbox" id="qs${i}"${r.def?' checked':''}>`:''}</td><td>${r.label}${r.note?`<div class="hint">${r.note}</div>`:''}</td><td class="old">${show(r.cur)}</td><td>${['parcelsNew','parcelsUpd','owners','ownersRef'].includes(r.id)?r.val:show(r.val)}</td></tr>`).join('');
+  $('qsTbl').innerHTML='<tr><th>套用</th><th>項目</th><th>目前</th><th>速算</th></tr>'+rows.map((r,i)=>`<tr><td>${r.apply?`<input type="checkbox" id="qs${i}"${r.def?' checked':''}>`:''}</td><td>${r.label}${r.note?`<div class="hint">${r.note}</div>`:''}</td><td class="old">${show(r.cur)}</td><td>${['parcelsNew','parcelsUpd','owners','ownersRef','ownersUnits'].includes(r.id)?r.val:show(r.val)}</td></tr>`).join('');
+  $('qsWarn').style.display=RS?'none':'block';
   $('qsModal').style.display='block';
 }
 function closeQuick(){ $('qsModal').style.display='none'; QS=null; }
@@ -706,7 +1147,7 @@ function applyQuick(){
   flashStatus(`✓ 已從速算專案套用 ${n} 項；請補填總銷坪與各人分回坪數`);
 }
 
-bindCase(); recalc();
+bindCase(); recalc(); libInit();
 </script>
 </body>
 </html>

@@ -329,7 +329,8 @@ function lvtGeneral(H,E,years,selfRate,self){
 function landTaxAnnual(base,P){ // 一般用地（可累進）
   const s=P.landProgStart;
   if(!(s>0))return base*P.landBase;
-  const k=base/s; const steps=[[1,0.010,0],[5,0.015,0.005],[10,0.025,0.065],[15,0.035,0.175],[20,0.045,0.335],[Infinity,0.055,0.545]];
+  // 「超過累進起點地價未達五倍」指超過部分，所以第二級上限是起點的 6 倍（北市 115 年級距表：43,957,001～263,742,000）
+  const k=base/s; const steps=[[1,0.010,0],[6,0.015,0.005],[11,0.025,0.065],[16,0.035,0.175],[21,0.045,0.335],[Infinity,0.055,0.545]];
   for(const [lim,rate,d] of steps){ if(k<=lim)return base*rate-s*d; }
   return 0;
 }

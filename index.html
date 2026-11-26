@@ -135,6 +135,8 @@ small.ref{color:#888}
       <label class="f">開工日<input type="date" id="c-buildStart" data-k="dates.buildStart"></label>
       <label class="f">完工交屋日<input type="date" id="c-buildEnd" data-k="dates.buildEnd"><span class="h">契稅、完工後房屋稅地價稅從這天起算</span></label>
       <label class="f">完工後試算年數<input type="number" id="c-postYears" data-k="dates.postYears" min="1" max="10" step="1"><span class="h">房屋稅、地價稅逐年加總</span></label>
+      <label class="f">減免期限（選填）<input type="date" id="c-reliefDeadline" data-k="dates.reliefDeadline"><span class="h">土地移轉日晚於此日時提醒減徵可能不適用</span></label>
+      <label class="f">預計出售日（選填）<input type="date" id="c-saleDate" data-k="dates.saleDate"><span class="h">填了才試算 ③ 後續買賣（參考，不列入合計）</span></label>
     </div>
   </div>
 
@@ -158,6 +160,9 @@ small.ref{color:#888}
         <select id="c-vatPayer" data-k="prices.vatPayer"><option value="owner">地主負擔</option><option value="builder">建商負擔</option></select></label>
       <label class="f">房地比（房屋占比 %）<input type="number" id="c-hlRatio" data-k="prices.hlRatioManual" step="0.1" placeholder="空白＝自動計算"><span class="hint calc" id="hlHint"></span></label>
       <label class="f">代書費及其他雜支（元／人）<input type="number" id="c-scrivener" data-k="prices.scrivener" step="1000"></label>
+      <label class="f">新建物構造<select id="c-struct" data-k="prices.struct"><option value="RC">鋼筋混凝土以上</option><option value="other">其他</option></select><span class="h">RC 以上才可能認定高級住宅</span></label>
+      <label class="f">③ 房價年漲幅（%）<input type="number" id="c-saleGrowth" data-k="prices.saleGrowth" step="0.1"><span class="h">出售價＝分回總價 × 複利（未填個人售價時）</span></label>
+      <label class="f">③ 公告現值年漲幅（%）<input type="number" id="c-annGrowth" data-k="prices.annGrowth" step="0.1"><span class="h">估算出售時的土增稅</span></label>
     </div>
   </div>
 
@@ -181,6 +186,7 @@ small.ref{color:#888}
     <label class="f" style="min-width:260px">所有權人<select id="pickOwner" onchange="renderPerson()"></select></label>
     <button onclick="printDocs([$('pickOwner').value])">🖨 列印說明文件（A4／存 PDF）</button>
     <button onclick="downloadCard($('pickOwner').value)">📤 下載手機圖卡</button>
+    <label class="chk"><input type="checkbox" id="docIncSale">說明文件附上 ③ 出售參考</label>
   </div>
   <div id="personOut"></div>
 </section>
@@ -195,6 +201,10 @@ small.ref{color:#888}
       <button class="sm" onclick="printDocs(RES.owners.filter(x=>!x.skip).map(x=>x.id))">🖨 列印全部說明文件</button>
     </div>
     <div class="scroll" id="sumOut"></div>
+  </div>
+  <div class="card"><h2>試算快照</h2>
+    <div class="noprint" style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap"><input id="snapLabel" placeholder="快照名稱，例如：簽約、建照、使照" style="min-width:260px"><button onclick="takeSnapshot()">📸 存目前結果為快照</button></div>
+    <div id="snapOut"></div>
   </div>
 </section>
 
@@ -278,8 +288,23 @@ const PARAM_DEFS = {
   regFeeRate:   {label:'登記規費', value:0.001, unit:'比率', verified:false, note:'計算基礎待確認'},
   houseSingle:  {label:'房屋稅 全國單一自住', value:0.01, unit:'比率', verified:false},
   houseSelf:    {label:'房屋稅 其他自住', value:0.012, unit:'比率', verified:false},
-  houseNonSelf: {label:'房屋稅 非自住住家', value:0.024, unit:'比率', verified:false, note:'北市依全國持有戶數累進，第一期先用單一稅率'},
+  houseNonSelf: {label:'房屋稅 非自住住家（全國持有 2 戶以內）', value:0.032, unit:'比率', verified:true, source:'https://laws.gov.taipei/Law/LawSearch/LawArticleContent/FL006143'},
+  houseNonSelf3:{label:'房屋稅 非自住住家（3～4 戶）', value:0.038, unit:'比率', verified:true, source:'https://laws.gov.taipei/Law/LawSearch/LawArticleContent/FL006143'},
+  houseNonSelf5:{label:'房屋稅 非自住住家（5～6 戶）', value:0.042, unit:'比率', verified:true, source:'https://laws.gov.taipei/Law/LawSearch/LawArticleContent/FL006143'},
+  houseNonSelf7:{label:'房屋稅 非自住住家（7 戶以上）', value:0.048, unit:'比率', verified:true, source:'https://laws.gov.taipei/Law/LawSearch/LawArticleContent/FL006143'},
   houseBiz:     {label:'房屋稅 營業用', value:0.03, unit:'比率', verified:false},
+  luxThreshold: {label:'高級住宅認定 房地總價門檻（元）', value:80000000, unit:'元', verified:true, source:'https://tpctax.gov.taipei/News_Content.aspx?n=579D07D478597713&sms=87415A8B9CE81B16&s=83D95D44A1E7C0A7', note:'北市：RC 以上、住宅、按戶認定；車位依登記面積計入 2～4 位'},
+  luxPremium:   {label:'高級住宅 標準單價加價（%）', value:120, unit:'%', verified:true, source:'https://tpctax.gov.taipei/News_Content.aspx?n=BB8B93F0A49EAB80&sms=87415A8B9CE81B16&s=D30CC07B9FDE1BF4', note:'90/7/1 以後完成、適用新標準單價者'},
+  deedBuy:      {label:'契稅 買賣稅率（找補差額）', value:0.06, unit:'比率', verified:true, note:'契稅條例§6：交換有給付差額價款者，差額依買賣稅率'},
+  reh2:         {label:'房地合一 持有 2 年以內', value:0.45, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
+  reh5:         {label:'房地合一 2～5 年', value:0.35, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
+  reh10:        {label:'房地合一 5～10 年', value:0.20, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
+  rehOver:      {label:'房地合一 超過 10 年', value:0.15, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
+  rehUrban:     {label:'房地合一 參與都更／危老取得房地第一次移轉、持有 5 年以下', value:0.20, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
+  rehSelfFree:  {label:'房地合一 自住房地免稅額（元）', value:4000000, unit:'元', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
+  rehSelfRate:  {label:'房地合一 自住超過免稅額部分', value:0.10, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
+  rehExpRate:   {label:'房地合一 未提示費用：按成交價比率', value:0.03, unit:'比率', verified:true, source:'https://www.etax.nat.gov.tw/etwmain/alien-tax-service/alien-tax-faq/E8nlpLa', note:'所得稅法§14-6 後段'},
+  rehExpCap:    {label:'房地合一 未提示費用上限（元）', value:300000, unit:'元', verified:true, source:'https://www.etax.nat.gov.tw/etwmain/alien-tax-service/alien-tax-faq/E8nlpLa'},
   landSelf:     {label:'地價稅 自用住宅', value:0.002, unit:'比率', verified:true},
   landBase:     {label:'地價稅 一般基本稅率', value:0.01, unit:'比率', verified:true},
   landProgStart:{label:'地價稅 累進起點地價（元）', value:0, unit:'元', verified:false, note:'0＝不累進，一律以基本稅率計'},
@@ -350,7 +375,7 @@ function reliefInfo(c,P){
   if(t==='urban-agreement'){
     lines.push(agreeRelief?`✔ 土增稅、契稅減徵 ${pct(P.reliefRate)}（都更條例 §67 I⑧）`:`✘ 土增稅、契稅不減徵：需地方政府同意且在實施期限內`);
   }
-  if(t==='urban-rights') lines.push('⚠ 權利變換的土增稅、契稅減免規則待查證，第一期暫不套用');
+  if(t==='urban-rights') lines.push('⚠ 權利變換交換階段的土增稅、契稅減免待查證，暫不套用；更新後第一次出售時土增稅減徵 40%（§67 I④）已用於 ③');
   if(t==='danger') lines.push('危老無土增稅、契稅減免');
   if(t==='general') lines.push('一般合建：無任何減免');
   if(urban) lines.push(R.landUsableDuringBuild?'✔ 興建期間地價稅減半（土地仍可使用）':'✔ 興建期間地價稅免徵（土地無法使用）');
@@ -359,22 +384,50 @@ function reliefInfo(c,P){
   return {agreeRelief,halfOk,buildLand,houseExtYears,lines};
 }
 
-function unitValue(u,c,P){ // 房屋評定現值
-  const pr=c.prices||{};
-  const m2=num(u.ping)*P2M;
-  return num(pr.stdUnit)*(1+num(u.premium)/100)*num(pr.locRate)*m2*(1-num(pr.depr));
-}
 function unitPriceYuan(u,c){
   const pr=c.prices||{};
   if(numOrNull(u.priceWan)!==null)return num(u.priceWan)*1e4;
-  return u.kind==='car'?num(pr.carPrice)*1e4:num(u.ping)*num(pr.unitPrice)*1e4;
+  return u.kind==='car'?num(pr.carPrice)*1e4*(num(u.cars)||1):num(u.ping)*num(pr.unitPrice)*1e4;
 }
-function houseRate(u,P){
+// 高級住宅（北市）：RC 以上、住宅用途、按戶認定房地總價 ≥ 門檻。
+// 車位計入：該戶登記面積（不含車位）80 坪以下計 2 位、160 坪以下 3 位、超過 4 位；不足者全數計入。
+// 回傳每個單元的 {prem 加價%, auto 是否自動, total 認定總價, cars 計入位數}
+function luxInfo(o,c,P){
+  const units=o.units||[], out=units.map(()=>({prem:0,auto:true,total:0,cars:0}));
+  const rc=(c.prices&&c.prices.struct||'RC')==='RC';
+  // 車位池：每位價格
+  const pool=[]; units.forEach(u=>{ if(u.kind==='car'){ const n=Math.max(1,Math.round(num(u.cars)||1)); const each=unitPriceYuan(u,c)/n; for(let i=0;i<n;i++)pool.push(each); } });
+  units.forEach((u,i)=>{
+    if(numOrNull(u.premium)!==null){ out[i]={prem:num(u.premium),auto:false,total:0,cars:0}; return; }
+    if(u.kind==='car'||u.use==='biz')return;
+    const lim=num(u.ping)<=80?2:num(u.ping)<=160?3:4;
+    const take=pool.splice(0,lim);
+    const total=unitPriceYuan(u,c)+take.reduce((s,x)=>s+x,0);
+    out[i]={prem:(rc&&total>=P.luxThreshold)?P.luxPremium:0,auto:true,total,cars:take.length};
+  });
+  return out;
+}
+function unitValue(u,c,P,prem){ // 房屋評定現值；prem＝加價%（未給時用手動欄位）
+  const pr=c.prices||{};
+  const m2=num(u.ping)*P2M;
+  const pm=prem!=null?prem:num(u.premium);
+  return num(pr.stdUnit)*(1+pm/100)*num(pr.locRate)*m2*(1-num(pr.depr));
+}
+// 非自住住家用依全國持有戶數累進（北市房屋稅徵收自治條例§4）
+function houseRate(u,P,count){
   if(u.use==='biz')return {r:P.houseBiz,t:'營業用'};
   if(u.self==='single')return {r:P.houseSingle,t:'全國單一自住'};
   if(u.self==='self')return {r:P.houseSelf,t:'自住'};
-  return {r:P.houseNonSelf,t:'非自住'};
+  const n=Math.max(1,count||1);
+  const r=n<=2?P.houseNonSelf:n<=4?P.houseNonSelf3:n<=6?P.houseNonSelf5:P.houseNonSelf7;
+  return {r,t:`非自住（全國 ${n} 戶）`};
 }
+const rehRate=(yrs,urbanFirst,P)=>{ if(yrs<=2)return urbanFirst?P.rehUrban:P.reh2; if(yrs<=5)return urbanFirst?P.rehUrban:P.reh5; if(yrs<=10)return P.reh10; return P.rehOver; };
+const NEW_REGIME=new Date(2016,0,1); // 105/1/1
+function tranAcq(t){ return toDate(t.holdStart)||rocDateFull(t.regDate)||rocToDate(t.prevYM); }
+function rocDateFull(s){ const m=String(s||'').match(/(\d{2,3})\D+(\d{1,2})\D+(\d{1,2})/); return m?new Date(+m[1]+1911,+m[2]-1,+m[3]):null; }
+function addYears(d,n){ return new Date(d.getFullYear()+n,d.getMonth(),d.getDate()); }
+const ymdStr=d=>d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:'';
 
 // 每位所有權人的土地面積與保留比例
 function ownerLand(o,c,P){
@@ -404,9 +457,9 @@ function calcCase(c){
   if(!tDate)warnings.push('未填土地移轉日：土增稅持有年限以 0 計');
   // 房地比（全案）
   let sumHV=0,sumLV=0;
-  const lands={};
-  for(const o of c.owners||[]){ if(o.skip)continue; const L=ownerLand(o,c,P); lands[o.id]=L;
-    for(const u of o.units||[]) sumHV+=unitValue(u,c,P);
+  const lands={}, luxes={};
+  for(const o of c.owners||[]){ if(o.skip)continue; const L=ownerLand(o,c,P); lands[o.id]=L; const LX=luxInfo(o,c,P); luxes[o.id]=LX;
+    (o.units||[]).forEach((u,i)=>{ sumHV+=unitValue(u,c,P,LX[i].prem); });
     for(const x of L.trs) sumLV+=x.area*L.r*num(x.p.ann);
   }
   const hlCalc = (sumHV+sumLV)>0 ? sumHV/(sumHV+sumLV) : null;
@@ -435,22 +488,31 @@ function calcCase(c){
       const self=o.lvtSelf&&o.lvtSelf!=='none';
       const G=lvtGeneral(H,E,yrs,P.lvtSelf,self);
       const g=Math.max(0,G.tax), r=RI.agreeRelief?g*(1-P.reliefRate):g;
-      lvtG+=g; lvtR+=r;
+      lvtG+=g; lvtR+=r; x.H=H; x.E=E; x.tArea=tArea; x.lvtR=r;
+      // 時間門檻：移轉日後 2 年內跨過 20／30／40 年，可少繳多少
+      if(!self&&H>0&&hs&&tDate){ const nx=[20,30,40].find(n=>n>yrs);
+        if(nx){ const d=addYears(hs,nx); if(d>tDate&&(d-tDate)<=2*365.25*864e5){ const g2=Math.max(0,lvtGeneral(H,E,nx,P.lvtSelf,false).tax); const sv=(g-g2)*(RI.agreeRelief?1-P.reliefRate:1);
+          if(sv>1000)W.push(`⏰ 第 ${i+1} 筆土地 ${ymdStr(d)} 持有滿 ${nx} 年；土地移轉日若延到這天之後，土增稅約可少繳 ${fmtI(sv)} 元`); } } }
       lvtDet.push(`【${t.lot||'?'}｜${t.cause||''}｜前次移轉 ${t.prevYM||'?'}】換出面積 ${fmt2(x.area)} × (1 − 保留 ${pct(L.r)}) = ${fmt2(tArea)} ㎡；CPI ${cpi??'—'}；持有 ${yrs} 年
   原地價調整 E = ${fmtI(t.prevValue)} × ${cp.toFixed(3)} × ${fmt2(tArea)} = ${fmtI(E)}
   漲價總數額 H = ${fmtI(x.p.ann)} × ${fmt2(tArea)} − E${num(t.improve)?' − 改良費 '+fmtI(t.improve):''} = ${fmtI(H)}
   ${G.txt} = ${fmtI(g)}${RI.agreeRelief?`；減徵 ${pct(P.reliefRate)} 後 ${fmtI(r)}`:''}`);
     });
     add('build','lvt','土地增值稅',lvtG,lvtR,lvtDet.join('\n'));
-    // ① 契稅（交換）
-    let hv=0,dG=0; const dDet=[];
-    (o.units||[]).forEach(u=>{ const v=unitValue(u,c,P); hv+=v; dG+=v*P.deedExchange;
-      dDet.push(`${u.kind==='car'?'車位':'房屋'} ${fmt2(u.ping)} 坪：評定現值 ${fmtI(c.prices.stdUnit)}${num(u.premium)?` × (1 + 高級住宅加價 ${num(u.premium)}%)`:''} × ${c.prices.locRate} × ${fmt2(num(u.ping)*P2M)} ㎡${num(c.prices.depr)?` × (1 − ${c.prices.depr})`:''} = ${fmtI(v)}`); });
-    const dR=RI.agreeRelief?dG*(1-P.reliefRate):dG;
-    dDet.push(`契稅 = ${fmtI(hv)} × ${pct(P.deedExchange)} = ${fmtI(dG)}${RI.agreeRelief?`；減徵 ${pct(P.reliefRate)} 後 ${fmtI(dR)}`:''}`);
-    add('build','deed','契稅（交換）',dG,dR,dDet.join('\n'));
-    // ① 互易營業稅
+    // ① 契稅（交換；找補差額照買賣）
+    const LX=luxes[o.id]; let hv=0; const dDet=[]; const uv=[];
+    (o.units||[]).forEach((u,i)=>{ const pm=LX[i].prem; const v=unitValue(u,c,P,pm); uv.push(v); hv+=v;
+      if(LX[i].auto&&u.kind!=='car'&&LX[i].total>=P.luxThreshold)W.push(`🏷 第 ${i+1} 戶認定房地總價 ${fmtI(LX[i].total)} 元（含 ${LX[i].cars} 個車位）≥ ${fmtI(P.luxThreshold)}，屬高級住宅，標準單價加價 ${pm}%`);
+      dDet.push(`${u.kind==='car'?'車位':'房屋'} ${fmt2(u.ping)} 坪：評定現值 ${fmtI(c.prices.stdUnit)}${pm?` × (1 + 高級住宅加價 ${pm}%${LX[i].auto?'，自動判斷':'，手動'})`:''} × ${c.prices.locRate} × ${fmt2(num(u.ping)*P2M)} ㎡${num(c.prices.depr)?` × (1 − ${c.prices.depr})`:''} = ${fmtI(v)}`); });
     const price=(o.units||[]).reduce((s,u)=>s+unitPriceYuan(u,c),0);
+    const tuPay=num(o.topUpPay), tuRcv=num(o.topUpReceive);
+    const dShare=(tuPay>0&&price>0)?Math.min(1,tuPay/price):0;   // 找補差額占分回總價比例
+    const exV=hv*(1-dShare), dfV=hv*dShare;
+    const dG=exV*P.deedExchange+dfV*P.deedBuy, dR=exV*P.deedExchange*(RI.agreeRelief?1-P.reliefRate:1)+dfV*P.deedBuy;
+    if(dShare>0)dDet.push(`找補（地主補差額 ${fmtI(tuPay)} 元，占分回總價 ${pct(dShare)}）：差額部分現值 ${fmtI(dfV)} × 買賣 ${pct(P.deedBuy)}（不適用協議合建減徵）　※差額部分計稅基礎待確認`);
+    dDet.push(`契稅 = 交換部分 ${fmtI(exV)} × ${pct(P.deedExchange)}${dShare>0?` + 差額部分 ${fmtI(dfV)} × ${pct(P.deedBuy)}`:''} = ${fmtI(dG)}${RI.agreeRelief?`；交換部分減徵 ${pct(P.reliefRate)} 後 ${fmtI(dR)}`:''}`);
+    add('build','deed',dShare>0?'契稅（交換＋找補）':'契稅（交換）',dG,dR,dDet.join('\n'));
+    // ① 互易營業稅
     if(c.prices.vatPayer==='owner'){
       const v=price*hl/1.05*P.vatRate;
       add('build','vat','互易營業稅',v,v,`分回總價 ${fmtI(price)} × 房地比 ${pct(hl)}${hlManual!==null?'（手動）':'（計算值）'} ÷ 1.05 × ${pct(P.vatRate)} = ${fmtI(v)}`);
@@ -465,6 +527,25 @@ function calcCase(c){
     add('build','reg','登記規費',rf,rf,`(換出土地申報地價 ${fmtI(landDecV)} + 分回房屋評定現值 ${fmtI(hv)}) × ${pct(P.regFeeRate)} = ${fmtI(rf)}　※計算基礎待確認`);
     const sc=numOrNull(o.scrivener)!==null?num(o.scrivener):num(c.prices.scrivener);
     add('build','misc','代書費及其他雜支',sc,sc,numOrNull(o.scrivener)!==null?'個人手動金額':'案件預設金額');
+    // ① 房地合一稅（只在地主收取找補款時：差額視同出售部分土地；舊制土地不課）
+    const newTrs=L.trs.filter(x=>{ const a=tranAcq(x.t); return a&&a>=NEW_REGIME; });
+    if(tuRcv>0){
+      const s=tuRcv/(price+tuRcv);                       // 出售比例：差額 ÷ 換出土地價值（＝分回價值＋差額）
+      const newArea=newTrs.reduce((a,x)=>a+x.tArea,0), allArea=L.trs.reduce((a,x)=>a+x.tArea,0)||1;
+      const newPart=newArea/allArea;
+      if(newPart<=0) add('build','reh','房地合一稅（收取找補）',0,0,`收取找補 ${fmtI(tuRcv)} 元；換出土地皆為 105 年前取得（舊制），土地交易免納所得稅`);
+      else{
+        const cost=num(o.landCost);
+        const H=newTrs.reduce((a,x)=>a+Math.max(0,x.H||0),0);
+        const acq=newTrs.map(x=>tranAcq(x.t)).sort((a,b)=>a-b)[0]; const yrs=yearsBetween(acq,tDate);
+        const rate=rehRate(yrs,false,P), exp=Math.min(tuRcv*P.rehExpRate,P.rehExpCap)*newPart;
+        const inc=tuRcv*newPart-cost*s-exp-H*s, tax=Math.max(0,inc)*rate;
+        if(!cost)W.push('收取找補款且有新制土地：未填「新制土地原始取得成本」，房地合一稅以成本 0 估算（會高估）');
+        add('build','reh','房地合一稅（收取找補）',tax,tax,`收取找補 ${fmtI(tuRcv)} 元，視同出售換出土地的 ${pct(s)}（新制土地占 ${pct(newPart)}）
+  所得 = 找補 ${fmtI(tuRcv*newPart)} − 成本 ${fmtI(cost)} × ${pct(s)} − 費用 ${fmtI(exp)} − 土地漲價總數額 ${fmtI(H)} × ${pct(s)} = ${fmtI(inc)}
+  持有 ${yrs.toFixed(1)} 年，稅率 ${pct(rate)} → ${fmtI(tax)}　※依國稅局新聞稿原則試算，待查證`);
+      }
+    }
 
     // ② 興建期間地價稅
     const fullBase=L.trs.reduce((s,x)=>s+x.area*x.declared,0);
@@ -484,19 +565,60 @@ function calcCase(c){
     // ② 完工後房屋稅
     const houses=(o.units||[]).filter(u=>u.kind!=='car');
     const firstHouse=houses[0]||{self:'no',use:'home'};
+    const hCount=numOrNull(o.households)!==null?num(o.households):houses.filter(u=>u.use!=='biz'&&(u.self||'no')==='no').length;
     let hAnn=0; const hDet=[];
-    (o.units||[]).forEach(u=>{ const base=u.kind==='car'?Object.assign({},u,{self:firstHouse.self,use:firstHouse.use}):u; const R=houseRate(base,P); const v=unitValue(u,c,P); hAnn+=v*R.r; hDet.push(`${u.kind==='car'?'車位（隨主建物）':'房屋'} 現值 ${fmtI(v)} × ${R.t} ${pct(R.r)} = ${fmtI(v*R.r)}`); });
+    if(numOrNull(o.households)===null&&houses.some(u=>u.use!=='biz'&&(u.self||'no')==='no'))hDet.push(`全國持有戶數未填，以分回非自住戶數 ${hCount} 戶計`);
+    (o.units||[]).forEach((u,i)=>{ const base=u.kind==='car'?Object.assign({},u,{self:firstHouse.self,use:firstHouse.use}):u; const R=houseRate(base,P,hCount); const v=uv[i]; hAnn+=v*R.r; hDet.push(`${u.kind==='car'?'車位（隨主建物）':'房屋'} 現值 ${fmtI(v)} × ${R.t} ${pct(R.r)} = ${fmtI(v*R.r)}`); });
     let hG=0,hR=0; const halfH=RI.halfOk?Math.max(P.halfYears,RI.houseExtYears):0;
     for(let y=1;y<=postYears;y++){ const half=y<=halfH; hG+=hAnn; hR+=half?hAnn/2:hAnn; hDet.push(`第 ${y} 年：${fmtI(half?hAnn/2:hAnn)}${half?'（減半）':''}`); }
     add('hold','housePost',`完工後房屋稅（${postYears} 年）`,hG,hR,hDet.join('\n'));
 
-    const tot={build:{g:0,r:0},hold:{g:0,r:0}};
+    // ③ 因後續買賣產生（參考試算，不列入合計）
+    const sDate=toDate(D.saleDate);
+    if(sDate&&L.trs.length){
+      const pr=c.prices||{}, base=bEnd||tDate||toDate(D.calcDate);
+      const gy=yearsBetween(base,sDate);
+      const salePrice=numOrNull(o.salePriceWan)!==null?num(o.salePriceWan)*1e4:price*Math.pow(1+num(pr.saleGrowth)/100,gy);
+      const ay=yearsBetween(toDate(D.calcDate),sDate), annF=Math.pow(1+num(pr.annGrowth)/100,ay);
+      // 土增稅（出售保留土地；前次移轉現值仍為原取得時）
+      let sG=0,sR=0,Hs=0; const sDet=[`預計出售日 ${D.saleDate}；售價 ${fmtI(salePrice)} 元${numOrNull(o.salePriceWan)!==null?'（手動）':`（分回總價 × (1+${num(pr.saleGrowth)}%)^${gy.toFixed(1)}）`}`];
+      const rightsFirst=c.devType==='urban-rights';
+      L.trs.forEach((x,i)=>{ const t=x.t, a=x.area*L.r; if(a<=0)return;
+        const cp=(cpiLookup(t.prevYM)??100)/100, E=num(t.prevValue)*cp*a, ann=num(x.p.ann)*annF, H=ann*a-E; Hs+=Math.max(0,H);
+        const hs=toDate(t.holdStart)||rocToDate(t.prevYM), yrs=fullYears(hs,sDate), self=!!o.saleSelf;
+        const G=lvtGeneral(H,E,yrs,P.lvtSelf,self), g=Math.max(0,G.tax), r=rightsFirst?g*(1-P.reliefRate):g; sG+=g; sR+=r;
+        sDet.push(`【${t.lot}｜前次移轉 ${t.prevYM}】保留土地 ${fmt2(a)} ㎡；出售時公告現值估 ${fmtI(ann)}（年增 ${num(pr.annGrowth)}%）；持有 ${yrs} 年；${G.txt} = ${fmtI(g)}${rightsFirst?`；權利變換更新後第一次移轉減徵 ${pct(P.reliefRate)} → ${fmtI(r)}`:''}`); });
+      sDet.push('※ CPI 以目前表估算；實際依出售當月稅務專用表');
+      items.push({grp:'sale',key:'lvtSale',label:'出售時土地增值稅',g:sG,r:sR,det:sDet.join('\n')});
+      // 房地合一稅
+      const allNew=L.trs.every(x=>{ const a=tranAcq(x.t); return a&&a>=NEW_REGIME; });
+      if(!allNew){
+        items.push({grp:'sale',key:'rehSale',label:'出售時房地合一稅',g:0,r:0,det:'合建前土地有 105 年以前取得（舊制）：土地交易所得免稅，分回房屋部分是否適用新制待查證，本工具不估算'});
+      } else {
+        const acq=L.trs.map(x=>tranAcq(x.t)).sort((a,b)=>a-b)[0], yrs=yearsBetween(acq,sDate);
+        const urbanFirst=['urban-agreement','urban-rights','danger'].includes(c.devType);
+        const sRcv=tuRcv>0?tuRcv/(price+tuRcv):0; // 收過找補：該部分土地已視同出售，成本扣除對應比例
+        const cost=num(o.landCost)*(1-sRcv)+tuPay, exp=Math.min(salePrice*P.rehExpRate,P.rehExpCap);
+        const inc=salePrice-cost-exp-Hs;
+        let tax, how;
+        if(o.saleSelf){ tax=Math.max(0,inc-P.rehSelfFree)*P.rehSelfRate; how=`自住房地：${fmtI(P.rehSelfFree)} 以內免稅，超過部分 ${pct(P.rehSelfRate)}（需符合設籍、持有 6 年等條件）`; }
+        else { const rt=rehRate(yrs,urbanFirst,P); tax=Math.max(0,inc)*rt; how=`持有 ${yrs.toFixed(1)} 年（自合建前土地取得日起算）→ 稅率 ${pct(rt)}${urbanFirst&&yrs<=5?'（參與都更／危老第一次移轉）':''}`; }
+        if(!num(o.landCost))W.push('③ 未填「新制土地原始取得成本」，出售時房地合一稅以成本 0 估算（會高估）');
+        items.push({grp:'sale',key:'rehSale',label:'出售時房地合一稅',g:tax,r:tax,det:`所得 = 售價 ${fmtI(salePrice)} − 成本 ${fmtI(cost)}（土地原始取得成本${sRcv?` × (1 − 已收找補比例 ${pct(sRcv)})`:''}${tuPay?'＋補給建商的找補':''}）− 費用 ${fmtI(exp)} − 土地漲價總數額 ${fmtI(Hs)} = ${fmtI(inc)}\n${how} → ${fmtI(tax)}`});
+        // 持有期間門檻提醒
+        const nx=[2,5,10].find(n=>n>yrs); if(nx){ const d=addYears(acq,nx); if((d-sDate)<=0.5*365.25*864e5&&d>sDate)W.push(`⏰ ③ ${ymdStr(d)} 持有滿 ${nx} 年，出售日若延到這天之後，房地合一稅率會降低`); }
+      }
+    }
+    // 減免期限提醒
+    if(D.reliefDeadline&&RI.agreeRelief&&tDate&&tDate>toDate(D.reliefDeadline))W.push(`⚠ 土地移轉日晚於減免期限 ${D.reliefDeadline}，協議合建減徵可能不適用`);
+
+    const tot={build:{g:0,r:0},hold:{g:0,r:0},sale:{g:0,r:0}};
     for(const it of items){ tot[it.grp].g+=it.g; tot[it.grp].r+=it.r; }
     tot.all={g:tot.build.g+tot.hold.g,r:tot.build.r+tot.hold.r};
-    owners.push({id:o.id,name:o.name,land:L,hv,price,items,tot,warnings:W});
+    owners.push({id:o.id,name:o.name,land:L,hv,price,items,tot,warnings:W,lux:LX});
   }
-  const sum={build:{g:0,r:0},hold:{g:0,r:0},all:{g:0,r:0}};
-  for(const x of owners){ if(!x.tot)continue; for(const k of ['build','hold','all']){ sum[k].g+=x.tot[k].g; sum[k].r+=x.tot[k].r; } }
+  const sum={build:{g:0,r:0},hold:{g:0,r:0},all:{g:0,r:0},sale:{g:0,r:0}};
+  for(const x of owners){ if(!x.tot)continue; for(const k of ['build','hold','all','sale']){ sum[k].g+=x.tot[k].g; sum[k].r+=x.tot[k].r; } }
   return {P,RI,hl,hlCalc,hlManual,owners,sum,warnings,postYears};
 }
 </script>
@@ -510,9 +632,9 @@ const today=()=>new Date().toISOString().slice(0,10);
 function newCase(){ return {
   version:SAVE_VERSION, name:'', city:'台北市', devType:'urban-agreement',
   reliefs:{localConsent:false,inPeriod:false,landUsableDuringBuild:false,houseExtend:false},
-  dates:{calcDate:today(),transferDate:'',buildStart:'',buildEnd:'',postYears:2},
+  dates:{calcDate:today(),transferDate:'',buildStart:'',buildEnd:'',postYears:2,reliefDeadline:'',saleDate:''},
   allocation:{siteArea:'',totalSalePing:'',ownerRatio:''},
-  prices:{stdUnit:'',locRate:'',depr:0,unitPrice:'',carPrice:'',vatPayer:'owner',hlRatioManual:'',scrivener:0},
+  prices:{stdUnit:'',locRate:'',depr:0,unitPrice:'',carPrice:'',vatPayer:'owner',hlRatioManual:'',scrivener:0,struct:'RC',saleGrowth:0,annGrowth:0},
   parcels:[], owners:[], paramOverrides:{}, snapshots:[]
 };}
 let C=newCase(), RES=null, seq=1;
@@ -575,7 +697,7 @@ function renderOwners(){
   $('ownerList').innerHTML=C.owners.map((o,i)=>{
     const P=`owners.${i}`;
     const R=RES&&RES.owners.find(x=>x.id===o.id);
-    const L=R&&R.land;
+    const L=R&&R.land, LXo=R&&R.lux;
     return `<div class="card owner">
     <div class="head">
       <input class="name" placeholder="姓名" value="${esc(o.name)}" onchange="setOv('${P}.name',this.value)">
@@ -589,7 +711,12 @@ function renderOwners(){
       <label class="f">完工後地價稅${ovrChk(P+'.landSelfUse',o.landSelfUse,false,'自用住宅 2‰')}</label>
       <label class="f">保留土地比例（覆蓋）<input type="number" step="0.0001" placeholder="空白＝自動" class="${numOrNull(o.retainOverride)!==null?'ovr':''}" value="${esc(o.retainOverride)}" onchange="setO('${P}.retainOverride',this.value)"><span class="hint calc">${L?`自動：${pct(L.r)}（原持分 ${fmt2(L.ownArea)} ㎡，保留 ${fmt2(L.retainArea)} ㎡）`:''}</span>${numOrNull(o.qsLandPing)!==null?`<span class="hint">速算土地 ${fmt2(o.qsLandPing)} 坪 ≈ ${fmt2(num(o.qsLandPing)*P2M)} ㎡${L&&L.ownArea&&Math.abs(L.ownArea-num(o.qsLandPing)*P2M)>0.5?' <b class="bad">與謄本持分不符</b>':''}</span>`:''}</label>
       <label class="f">代書費及雜支（覆蓋）<input type="number" placeholder="空白＝案件預設" class="${numOrNull(o.scrivener)!==null?'ovr':''}" value="${esc(o.scrivener)}" onchange="setO('${P}.scrivener',this.value)"></label>
-      <label class="f">全國持有房屋戶數<input type="number" value="${esc(o.households)}" onchange="setOv('${P}.households',this.value)"><span class="h">第一期僅記錄</span></label>
+      <label class="f">全國持有房屋戶數（含分回）<input type="number" value="${esc(o.households)}" placeholder="空白＝分回非自住戶數" onchange="setO('${P}.households',this.value)"><span class="h">本人、配偶、未成年子女合計；決定非自住房屋稅率</span></label>
+      <label class="f">找補：補給建商（元）<input type="number" class="${num(o.topUpPay)?'ovr':''}" value="${esc(o.topUpPay)}" onchange="setO('${P}.topUpPay',this.value)"><span class="h">多選坪數補差額；差額部分契稅 6%</span></label>
+      <label class="f">找補：向建商收取（元）<input type="number" class="${num(o.topUpReceive)?'ovr':''}" value="${esc(o.topUpReceive)}" onchange="setO('${P}.topUpReceive',this.value)"><span class="h">少選坪數收差額；新制土地要報房地合一稅</span></label>
+      <label class="f">新制土地原始取得成本（元）<input type="number" value="${esc(o.landCost)}" onchange="setOv('${P}.landCost',this.value)"><span class="h">105 年後取得的合建前土地買價；房地合一稅用</span></label>
+      <label class="f">③ 預計售價（萬，選填）<input type="number" value="${esc(o.salePriceWan)}" placeholder="空白＝分回總價×漲幅" onchange="setOv('${P}.salePriceWan',this.value)"></label>
+      <label class="f">③ 出售時${ovrChk(P+'.saleSelf',o.saleSelf,false,'自住（土增 10%、房地合一 400 萬免稅）')}</label>
       <label class="f">其他${ovrChk(P+'.skip',o.skip,false,'法人／公有，不試算')}</label>
     </div>
     <h3>土地取得紀錄（一筆＝謄本上一組「前次移轉現值＋歷次取得權利範圍」）</h3>
@@ -607,15 +734,15 @@ function renderOwners(){
     </table></div>
     <button class="sm" onclick="addLand(${i})">＋ 取得紀錄</button>
     <h3>分回單元（房屋、車位各一筆）</h3>
-    <div class="scroll"><table><tr><th>類型</th><th>坪數</th><th>總價（萬，空白＝單價推算）</th><th>用途</th><th>自住</th><th>高級住宅加價（%）</th><th class="n">評定現值</th><th></th></tr>
+    <div class="scroll"><table><tr><th>類型</th><th>坪數</th><th>總價（萬，空白＝單價推算）</th><th>用途</th><th>自住</th><th>高級住宅加價（%，空白＝自動）</th><th class="n">評定現值</th><th></th></tr>
     ${(o.units||[]).map((u,j)=>{const Q=`${P}.units.${j}`;return `<tr>
       <td><select onchange="setO('${Q}.kind',this.value)"><option value="house"${u.kind!=='car'?' selected':''}>房屋</option><option value="car"${u.kind==='car'?' selected':''}>車位</option></select></td>
       <td><input type="number" step="0.01" value="${esc(u.ping)}" onchange="setO('${Q}.ping',this.value)">${u.kind==='car'&&u.cars?`<span class="hint">約 ${fmt2(u.cars)} 位</span>`:''}</td>
       <td><input type="number" value="${esc(u.priceWan)}" onchange="setOv('${Q}.priceWan',this.value)"></td>
       <td>${u.kind==='car'?'<span class="hint">隨主建物</span>':ovrSel(Q+'.use',u.use||'home','home',[['home','住家用'],['biz','營業用']])}</td>
       <td>${u.kind==='car'?'<span class="hint">隨主建物</span>':ovrSel(Q+'.self',u.self||'no','no',[['no','非自住'],['self','自住'],['single','全國單一自住']])}</td>
-      <td><input type="number" class="${num(u.premium)?'ovr':''}" value="${esc(u.premium)}" placeholder="0" title="第三期改為依門檻自動判斷" onchange="setO('${Q}.premium',this.value)"></td>
-      <td class="n">${fmtI(unitValue(u,C,paramsOf(C)))}</td>
+      <td>${u.kind==='car'?'<span class="hint">—</span>':`<input type="number" class="${numOrNull(u.premium)!==null?'ovr':''}" value="${esc(u.premium)}" placeholder="自動 ${LXo?LXo[j].prem:0}" title="空白＝依北市高級住宅門檻自動判斷" onchange="setO('${Q}.premium',this.value)">${LXo&&LXo[j].auto&&LXo[j].total?`<span class="hint">認定總價 ${fmtI(LXo[j].total/1e4)} 萬</span>`:''}`}</td>
+      <td class="n">${fmtI(unitValue(u,C,paramsOf(C),LXo?LXo[j].prem:null))}</td>
       <td><button class="sm del" onclick="delRow('${P}.units',${j})">刪除</button></td></tr>`;}).join('')}
     </table></div>
     <button class="sm" onclick="addUnit(${i},'house')">＋ 房屋</button> <button class="sm" onclick="addUnit(${i},'car')">＋ 車位</button>
@@ -664,32 +791,58 @@ function renderPerson(){
       <tr class="grp"><td colspan="4">② 因持有產生</td></tr>${rows('hold')}
       <tr class="tot"><td>② 小計</td><td class="n">${fmtI(t.hold.g)}</td><td class="n">${fmtI(t.hold.r)}</td><td class="n save">${fmtI(t.hold.g-t.hold.r)}</td></tr>
       <tr class="tot"><td>合計</td><td class="n">${fmtI(t.all.g)}</td><td class="n">${fmtI(t.all.r)}</td><td class="n save">${fmtI(t.all.g-t.all.r)}</td></tr>
+      ${R.items.some(it=>it.grp==='sale')?`<tr class="grp"><td colspan="4">③ 因後續買賣產生（參考試算，不列入合計）</td></tr>${rows('sale')}<tr class="tot"><td>③ 小計</td><td class="n">${fmtI(t.sale.g)}</td><td class="n">${fmtI(t.sale.r)}</td><td class="n save">${t.sale.g-t.sale.r>0.5?fmtI(t.sale.g-t.sale.r):''}</td></tr>`:''}
     </table>
     <p class="hint">本表僅供預估參考，實際稅費依產權移轉當時之稅令規定及主管機關核定為準；前次移轉現值以稅捐稽徵機關核算者為準。</p>
   </div>`;
 }
 
 // ④ 總表
-const SUM_COLS=[['lvt','土增稅'],['deed','契稅'],['vat','互易營業稅'],['stamp','印花稅'],['reg','登記規費'],['misc','代書雜支'],['B','① 小計'],['landBuild','興建期地價稅'],['landPost','完工後地價稅'],['housePost','完工後房屋稅'],['H','② 小計'],['A','合計']];
-function sumVals(R,key,kind){ if(!R.tot)return null; if(key==='B')return R.tot.build[kind]; if(key==='H')return R.tot.hold[kind]; if(key==='A')return R.tot.all[kind]; const it=R.items.find(i=>i.key===key); return it?it[kind]:0; }
+const SUM_COLS=[['lvt','土增稅'],['deed','契稅'],['vat','互易營業稅'],['reh','房地合一（找補）'],['stamp','印花稅'],['reg','登記規費'],['misc','代書雜支'],['B','① 小計'],['landBuild','興建期地價稅'],['landPost','完工後地價稅'],['housePost','完工後房屋稅'],['H','② 小計'],['A','合計'],['S','③ 出售參考']];
+function sumVals(R,key,kind){ if(!R.tot)return null; if(key==='B')return R.tot.build[kind]; if(key==='H')return R.tot.hold[kind]; if(key==='A')return R.tot.all[kind]; if(key==='S')return R.tot.sale[kind]; const it=R.items.find(i=>i.key===key); return it?it[kind]:0; }
+function sumCols(){ // 房地合一（找補）、③ 只在有資料時顯示
+  const hasReh=RES.owners.some(R=>R.items&&R.items.some(i=>i.key==='reh')), hasSale=RES.owners.some(R=>R.items&&R.items.some(i=>i.grp==='sale'));
+  return SUM_COLS.filter(([k])=>(k!=='reh'||hasReh)&&(k!=='S'||hasSale));
+}
 function renderSummary(){
-  if(!RES)return; const showG=$('sumShowGeneral').checked;
-  const head=`<tr><th>序</th><th>所有權人</th><th class="n">原持分㎡</th><th class="n">分回坪</th>${SUM_COLS.map(([k,t])=>`<th class="n">${t}</th>`).join('')}<th class="n">省下</th></tr>`;
+  if(!RES)return; const showG=$('sumShowGeneral').checked, cols=sumCols();
+  const head=`<tr><th>序</th><th>所有權人</th><th class="n">原持分㎡</th><th class="n">分回坪</th>${cols.map(([k,t])=>`<th class="n"${k==='S'?' style="background:#f7f0e6"':''}>${t}</th>`).join('')}<th class="n">省下</th></tr>`;
   const body=RES.owners.map((R,i)=>{
-    if(R.skip)return `<tr><td>${i+1}</td><td>${esc(R.name)}</td><td colspan="${SUM_COLS.length+3}" class="hint">不試算</td></tr>`;
-    const cell=k=>{ const r=sumVals(R,k,'r'), g=sumVals(R,k,'g'); return `<td class="n${['B','H','A'].includes(k)?' tot':''}">${fmtI(r)}${showG&&g-r>0.5?`<br><small class="ref">${fmtI(g)}</small>`:''}</td>`; };
-    return `<tr><td>${i+1}</td><td>${esc(R.name)}${R.warnings.length?' <span class="bad" title="'+esc(R.warnings.join('\n'))+'">⚠</span>':''}</td><td class="n">${fmt2(R.land.ownArea)}</td><td class="n">${fmt2(R.land.salePing)}</td>${SUM_COLS.map(([k])=>cell(k)).join('')}<td class="n save">${fmtI(R.tot.all.g-R.tot.all.r)}</td></tr>`;
+    if(R.skip)return `<tr><td>${i+1}</td><td>${esc(R.name)}</td><td colspan="${cols.length+3}" class="hint">不試算</td></tr>`;
+    const cell=k=>{ const r=sumVals(R,k,'r'), g=sumVals(R,k,'g'); return `<td class="n${['B','H','A'].includes(k)?' tot':''}"${k==='S'?' style="color:#8a6d3b"':''}>${fmtI(r)}${showG&&g-r>0.5?`<br><small class="ref">${fmtI(g)}</small>`:''}</td>`; };
+    return `<tr><td>${i+1}</td><td>${esc(R.name)}${R.warnings.length?' <span class="bad" title="'+esc(R.warnings.join('\n'))+'">⚠</span>':''}</td><td class="n">${fmt2(R.land.ownArea)}</td><td class="n">${fmt2(R.land.salePing)}</td>${cols.map(([k])=>cell(k)).join('')}<td class="n save">${fmtI(R.tot.all.g-R.tot.all.r)}</td></tr>`;
   }).join('');
   const tot=k=>RES.owners.reduce((s,R)=>s+(sumVals(R,k,'r')||0),0);
   const totG=k=>RES.owners.reduce((s,R)=>s+(sumVals(R,k,'g')||0),0);
-  const foot=`<tr class="tot"><td></td><td>全案合計</td><td class="n">${fmt2(RES.owners.reduce((s,R)=>s+(R.land?R.land.ownArea:0),0))}</td><td class="n">${fmt2(RES.owners.reduce((s,R)=>s+(R.land?R.land.salePing:0),0))}</td>${SUM_COLS.map(([k])=>`<td class="n">${fmtI(tot(k))}${showG&&totG(k)-tot(k)>0.5?`<br><small class="ref">${fmtI(totG(k))}</small>`:''}</td>`).join('')}<td class="n save">${fmtI(RES.sum.all.g-RES.sum.all.r)}</td></tr>`;
-  $('sumOut').innerHTML=`<p class="hint">金額為減徵後${showG?'（灰字＝一般未減免）':''}；② 以完工後 ${RES.postYears} 年計。房地比 ${pct(RES.hl)}${RES.hlManual!=null?'（手動）':''}。</p><table>${head}${body}${foot}</table>`;
+  const foot=`<tr class="tot"><td></td><td>全案合計</td><td class="n">${fmt2(RES.owners.reduce((s,R)=>s+(R.land?R.land.ownArea:0),0))}</td><td class="n">${fmt2(RES.owners.reduce((s,R)=>s+(R.land?R.land.salePing:0),0))}</td>${cols.map(([k])=>`<td class="n">${fmtI(tot(k))}${showG&&totG(k)-tot(k)>0.5?`<br><small class="ref">${fmtI(totG(k))}</small>`:''}</td>`).join('')}<td class="n save">${fmtI(RES.sum.all.g-RES.sum.all.r)}</td></tr>`;
+  $('sumOut').innerHTML=`<p class="hint">金額為減徵後${showG?'（灰字＝一般未減免）':''}；② 以完工後 ${RES.postYears} 年計。房地比 ${pct(RES.hl)}${RES.hlManual!=null?'（手動）':''}。${cols.some(c=>c[0]==='S')?'③ 出售參考不列入合計。':''}</p><table>${head}${body}${foot}</table>`;
+  renderSnapshots();
+}
+// 試算快照：各里程碑存一次，之後與目前結果並排比較
+function takeSnapshot(){
+  recalc(); const label=($('snapLabel').value||'').trim()||`快照 ${(C.snapshots||[]).length+1}`;
+  (C.snapshots=C.snapshots||[]).push({label,date:todayStr(),calcDate:C.dates.calcDate,paramsVersion:activeLib().version,cpiBase:cpiBase(),
+    total:RES.sum.all.r,totalG:RES.sum.all.g,owners:RES.owners.filter(R=>!R.skip&&R.tot).map(R=>({id:R.id,name:R.name,r:R.tot.all.r,g:R.tot.all.g}))});
+  $('snapLabel').value=''; renderSnapshots(); flashStatus(`✓ 已存快照「${label}」（記得儲存專案）`);
+}
+function delSnapshot(i){ C.snapshots.splice(i,1); renderSnapshots(); }
+function renderSnapshots(){
+  const el=$('snapOut'); if(!el||!RES)return; const S=C.snapshots||[];
+  if(!S.length){ el.innerHTML='<p class="hint">還沒有快照。在簽約、事業計畫核定、建照、使照等時點各存一次，之後可比較預估與實際的差異。</p>'; return; }
+  const cur=Object.fromEntries(RES.owners.filter(R=>R.tot).map(R=>[R.id,R.tot.all.r]));
+  const ids=[...new Set(S.flatMap(s=>s.owners.map(o=>o.id)))];
+  const nameOf=id=>{ for(const s of S){ const o=s.owners.find(x=>x.id===id); if(o)return o.name; } return id; };
+  el.innerHTML=`<div class="scroll"><table><tr><th>所有權人</th>${S.map((s,i)=>`<th class="n">${esc(s.label)}<br><small class="ref">${esc(s.date)}｜參數 v${s.paramsVersion}</small><br><button class="sm del" onclick="delSnapshot(${i})">刪除</button></th>`).join('')}<th class="n">目前</th><th class="n">與最早快照差</th></tr>
+    ${ids.map(id=>{ const vs=S.map(s=>{const o=s.owners.find(x=>x.id===id); return o?o.r:null;}); const first=vs.find(v=>v!=null), now=cur[id];
+      return `<tr><td>${esc(nameOf(id))}</td>${vs.map(v=>`<td class="n">${v==null?'—':fmtI(v)}</td>`).join('')}<td class="n"><b>${now==null?'—':fmtI(now)}</b></td><td class="n ${now!=null&&first!=null&&now>first?'bad':'save'}">${now!=null&&first!=null?(now-first>=0?'+':'')+fmtI(now-first):'—'}</td></tr>`; }).join('')}
+    <tr class="tot"><td>全案合計</td>${S.map(s=>`<td class="n">${fmtI(s.total)}</td>`).join('')}<td class="n">${fmtI(RES.sum.all.r)}</td><td class="n">${(RES.sum.all.r-S[0].total>=0?'+':'')+fmtI(RES.sum.all.r-S[0].total)}</td></tr></table></div>`;
 }
 function exportCSV(){
   const q=s=>'"'+String(s??'').replace(/"/g,'""')+'"';
-  const lines=[['序','所有權人','原持分㎡','分回坪',...SUM_COLS.map(c=>c[1]+'（減徵後）'),...SUM_COLS.map(c=>c[1]+'（一般）')].map(q).join(',')];
+  const cols=sumCols();
+  const lines=[['序','所有權人','原持分㎡','分回坪',...cols.map(c=>c[1]+'（減徵後）'),...cols.map(c=>c[1]+'（一般）')].map(q).join(',')];
   RES.owners.forEach((R,i)=>{ if(R.skip){lines.push([i+1,R.name,'不試算'].map(q).join(','));return;}
-    lines.push([i+1,R.name,R.land.ownArea.toFixed(2),R.land.salePing.toFixed(2),...SUM_COLS.map(([k])=>Math.round(sumVals(R,k,'r'))),...SUM_COLS.map(([k])=>Math.round(sumVals(R,k,'g')))].map(q).join(',')); });
+    lines.push([i+1,R.name,R.land.ownArea.toFixed(2),R.land.salePing.toFixed(2),...cols.map(([k])=>Math.round(sumVals(R,k,'r'))),...cols.map(([k])=>Math.round(sumVals(R,k,'g')))].map(q).join(',')); });
   const blob=new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=(C.name||'稅費試算')+'_總表.csv'; a.click(); URL.revokeObjectURL(a.href);
 }
@@ -880,6 +1033,9 @@ function explain(key){
     case 'landBuild': return RI.buildLand===0?'興建期間土地無法使用，地價稅免徵。':RI.buildLand===0.5?'興建期間土地仍可使用，地價稅減半。':'興建期間地價稅照常繳納。';
     case 'landPost': return `完工後每年繳地價稅（以您保留的土地持分計）。`+(RI.halfOk?`前 ${hy} 年減半。`:'');
     case 'housePost': return '完工後每年繳房屋稅。'+(RI.halfOk?`前 ${Math.max(hy,RI.houseExtYears)} 年減半${RI.houseExtYears?'（期間內未移轉）':''}。`:'');
+    case 'reh': return '向建商收取找補款，等於賣掉部分土地；105 年以後取得的土地要申報房地合一稅。';
+    case 'lvtSale': return '日後出售保留的土地持分時，依當時公告現值課土地增值稅。';
+    case 'rehSale': return '日後出售房地的所得稅；持有期間從合建前取得土地的日子起算。';
   }
   return '';
 }
@@ -901,6 +1057,8 @@ function docHTML(R){
     <h2>② 因持有產生（興建期間與完工後 ${RES.postYears} 年）</h2>
     <table><tr><th>項目</th><th class="n">一般</th><th class="n">適用減免後</th><th>說明</th></tr>${rows('hold')}${sub('小計',t.hold)}</table>
     <table style="margin-top:8px"><tr class="tot"><td>合計</td><td class="n">${fmtI(t.all.g)}</td><td class="n">${fmtI(t.all.r)}</td><td class="ex">少繳 ${fmtI(t.all.g-t.all.r)} 元</td></tr></table>
+    ${($('docIncSale')&&$('docIncSale').checked&&R.items.some(it=>it.grp==='sale'))?`<h2>③ 日後出售時（參考，預計 ${esc(D.saleDate)} 出售，不含在上方合計）</h2>
+    <table><tr><th>項目</th><th class="n">一般</th><th class="n">適用減免後</th><th>說明</th></tr>${rows('sale')}${sub('小計',t.sale)}</table>`:''}
     <div class="foot">
       <b>試算前提</b>：${RES.RI.lines.map(esc).join('；')}。${ests.length?'預估日期：'+ests.join('、')+'。':''}${annY?`公告現值採 ${esc(annY)} 年。`:''}物價指數採 ${cpiBase()} 稅務專用表。<br>
       ※ 本表僅供預估參考，實際稅費依產權移轉當時之稅令規定及主管機關核定為準；前次移轉現值以稅捐稽徵機關核算者為準。

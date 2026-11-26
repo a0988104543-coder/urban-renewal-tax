@@ -910,8 +910,8 @@ const PARAM_SOURCES={
 };
 function buildUpdatePrompt(){
   const due=libDue(LIB); if(!due.length)return '';
-  const lines=due.map(x=>{ const cur=x.key==='cpi'?`目前版本 ${LIB.cpi.base}`:`目前值 ${LIB.params[x.key].value}`;
-    return `- ${x.key}：${x.label}（${cur}）。查詢來源：${PARAM_SOURCES[x.key]||'全國法規資料庫或主管機關公告'}`; }).join('\n');
+  const lines=due.map(x=>{ const p=LIB.params[x.key]; const cur=x.key==='cpi'?`目前版本 ${LIB.cpi.base}`:(p&&p.value!=null?`目前值 ${p.value}`:`參數庫尚無，內建值 ${PARAM_DEFS[x.key].value}`);
+    return `- ${x.key}：${x.label}（${cur}）。查詢來源：${PARAM_SOURCES[x.key]||(PARAM_DEFS[x.key]&&PARAM_DEFS[x.key].source)||'全國法規資料庫或主管機關公告'}`; }).join('\n');
   return `請用網路搜尋，到官方網站查詢下列台灣稅務參數的最新值。只採用政府網站（gov.tw）或全國法規資料庫的資料。
 ${lines}
 

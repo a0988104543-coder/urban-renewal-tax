@@ -706,7 +706,7 @@ async function libInit(){
   const url=localStorage.getItem(LS_URL);
   if(url){ try{ const r=await fetch(url,{redirect:'follow'}); const d=await r.json(); const L=d.params&&d.params.schema?d.params:d;
       if(L&&L.schema==='tax-params-1'){ LIB=L; localStorage.setItem(LS_CACHE,JSON.stringify(L)); flashStatus(`✓ 參數庫 v${L.version} 已載入`); }
-      else flashStatus('⚠ 參數庫網址回傳的不是參數檔，暫用快取');
+      else flashStatus('⚠ 雲端參數庫：'+(d.error||'回傳的不是參數檔')+'，暫用快取');
     }catch(err){ flashStatus('⚠ 讀不到雲端參數庫，暫用快取／內建參數'); } }
   recalc(); renderDueBadge();
 }
@@ -718,7 +718,7 @@ function renderParams(){
     <div class="grid">
       <label class="f">參數庫網址（Apps Script 網頁應用程式）<input id="libUrl" value="${esc(url)}" placeholder="https://script.google.com/macros/s/…/exec"></label>
       <label class="f">寫入金鑰（只存在這台裝置）<input id="libKey" type="password" value="${esc(key)}" placeholder="與 Apps Script 的 WRITE_KEY 相同"></label>
-      <div style="align-self:end;display:flex;gap:6px;flex-wrap:wrap"><button onclick="saveLibSettings()">儲存設定並重新讀取</button><button onclick="downloadLib()">下載 params.json</button></div>
+      <div style="align-self:end;display:flex;gap:6px;flex-wrap:wrap"><button onclick="saveLibSettings()">儲存設定並重新讀取</button><button onclick="downloadLib()">下載 params.json</button>${url&&key?'<button onclick="pushLib()">把目前參數寫入雲端</button>':''}</div>
     </div>`;
   const due=new Set(libDue(L).map(x=>x.key));
   $('paramTbl').innerHTML='<tr><th>參數</th><th class="n">參數庫值</th><th>本案覆蓋</th><th>狀態</th><th>下次檢查</th><th>來源／說明</th></tr>'+Object.entries(PARAM_DEFS).map(([k,d])=>{
@@ -733,6 +733,13 @@ function saveLibSettings(){ const u=$('libUrl').value.trim(), k=$('libKey').valu
   if(u&&!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec/.test(u)){ alert('請貼上 Apps Script 網頁應用程式網址（https://script.google.com/macros/s/…/exec）'); return; }
   u?localStorage.setItem(LS_URL,u):localStorage.removeItem(LS_URL); k?localStorage.setItem(LS_KEY,k):localStorage.removeItem(LS_KEY); libInit(); }
 function downloadLib(){ const b=new Blob([JSON.stringify(LIB,null,1)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=`params_v${LIB.version}.json`; a.click(); URL.revokeObjectURL(a.href); }
+// 第一次建立雲端參數庫，或雲端資料遺失時：把這台裝置目前的參數庫整份寫上去
+async function pushLib(){
+  const url=localStorage.getItem(LS_URL), key=localStorage.getItem(LS_KEY); if(!url||!key)return;
+  try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'save',key,params:LIB})}); const d=await r.json();
+    if(!d.ok)throw new Error(d.error||'寫入失敗'); flashStatus(`✓ 已寫入雲端參數庫 v${d.version}`); libInit(); }
+  catch(err){ alert('寫入雲端失敗：'+err.message); }
+}
 function useLatestParams(){ FROZEN=null; C.paramsUsed=null; recalc(); flashStatus('✓ 已改用最新參數重算'); }
 
 // 更新提示詞 → Claude（開網路搜尋）→ 貼回 JSON → 檢查、對照 → 寫回參數庫

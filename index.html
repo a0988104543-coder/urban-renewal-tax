@@ -731,7 +731,8 @@ function setParam(k,v){ C.paramOverrides=C.paramOverrides||{}; if(v==='')delete 
 function cpiLookupUI(){ const v=cpiLookup($('cpiQ').value); $('cpiA').innerHTML=v==null?'<span class="hint">查無資料</span>':`<b>${v}</b>（調整倍數 ${(v/100).toFixed(3)}）`; }
 function saveLibSettings(){ const u=$('libUrl').value.trim(), k=$('libKey').value.trim();
   if(u&&!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec/.test(u)){ alert('請貼上 Apps Script 網頁應用程式網址（https://script.google.com/macros/s/…/exec）'); return; }
-  u?localStorage.setItem(LS_URL,u):localStorage.removeItem(LS_URL); k?localStorage.setItem(LS_KEY,k):localStorage.removeItem(LS_KEY); libInit(); }
+  u?localStorage.setItem(LS_URL,u):localStorage.removeItem(LS_URL); k?localStorage.setItem(LS_KEY,k):localStorage.removeItem(LS_KEY);
+  renderParams(); flashStatus('✓ 設定已儲存，正在讀取參數庫…'); libInit(); }
 function downloadLib(){ const b=new Blob([JSON.stringify(LIB,null,1)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=`params_v${LIB.version}.json`; a.click(); URL.revokeObjectURL(a.href); }
 // 第一次建立雲端參數庫，或雲端資料遺失時：把這台裝置目前的參數庫整份寫上去
 async function pushLib(){

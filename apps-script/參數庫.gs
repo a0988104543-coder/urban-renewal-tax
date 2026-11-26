@@ -8,17 +8,18 @@
  * 寫入（POST）：body 為 { action:'save', key, params }，key 必須等於指令碼屬性 WRITE_KEY。
  *               每次寫入前，舊版會另存一份 params_v<版本>.json 備份在同一資料夾。
  *
- * 指令碼屬性（專案設定 → 指令碼屬性）：
- *   WRITE_KEY        必填，自訂一串只有自己知道的文字（工具的「寫入金鑰」填同一串）
- *   PARAMS_FILE_ID   由 setup() 自動建立，不用手填
+ * 指令碼屬性（專案設定 → 指令碼屬性，皆由 setup() 自動建立）：
+ *   WRITE_KEY        寫入金鑰（工具的「寫入金鑰」填同一串）；忘記時執行 showKey() 查看
+ *   PARAMS_FILE_ID   params.json 的檔案 ID
  *
  * 第一次使用：
  *   1. 在編輯器上方選 setup，按「執行」，依畫面授權（需要 Drive 權限）。
- *      會在「我的雲端硬碟」建立資料夾「都更稅費參數庫」與空的 params.json。
+ *      會在「我的雲端硬碟」建立資料夾「都更稅費參數庫」與空的 params.json，
+ *      並在執行記錄印出寫入金鑰。
  *   2. 部署作業 → 新增部署作業 → 網頁應用程式
  *      執行身分：我　／　誰可以存取：所有人
  *   3. 把網頁應用程式網址貼到工具 ⑤ 參數頁的「參數庫網址」，金鑰貼到「寫入金鑰」。
- *   4. 第一次寫入：在工具按「下載 params.json」或直接用更新流程寫入，之後都由工具寫回。
+ *   4. 在工具 ⑤ 參數頁按「把目前參數寫入雲端」完成第一次寫入，之後都由工具寫回。
  * 之後更新程式：管理部署作業 → 編輯 → 建立新版本（不要新增部署作業，否則網址會變）
  */
 
@@ -33,8 +34,16 @@ function setup() {
   var folder = it.hasNext() ? it.next() : DriveApp.createFolder(FOLDER_NAME);
   var file = folder.createFile('params.json', JSON.stringify({ schema: SCHEMA, version: -1, params: {} }), 'application/json');
   props.setProperty('PARAMS_FILE_ID', file.getId());
-  if (!props.getProperty('WRITE_KEY')) Logger.log('記得在指令碼屬性設定 WRITE_KEY');
   Logger.log('已建立 params.json：' + file.getId());
+  showKey();
+}
+
+/** 沒有 WRITE_KEY 時自動產生一組；把金鑰印在執行記錄，複製到工具的「寫入金鑰」。 */
+function showKey() {
+  var props = PropertiesService.getScriptProperties();
+  var key = props.getProperty('WRITE_KEY');
+  if (!key) { key = Utilities.getUuid().replace(/-/g, ''); props.setProperty('WRITE_KEY', key); }
+  Logger.log('寫入金鑰（貼到工具 ⑤ 參數頁）：' + key);
 }
 
 function doGet() {

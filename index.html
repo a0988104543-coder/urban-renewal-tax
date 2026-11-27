@@ -122,7 +122,8 @@ small.ref{color:#888}
           <option value="general">一般合建（無減免）</option>
         </select></label>
       <label class="chk"><input type="checkbox" id="c-consent" data-k="reliefs.localConsent">地方政府已同意減免</label>
-      <label class="chk"><input type="checkbox" id="c-inPeriod" data-k="reliefs.inPeriod">在減免實施期限內</label>
+      <label class="chk"><input type="checkbox" id="c-inPeriod" data-k="reliefs.inPeriod">在減免實施期限內（或可準用）</label>
+      <label class="chk"><input type="checkbox" id="c-planFiled" data-k="reliefs.planFiled">事業計畫已於期限前報核或核定（§67 III 準用）</label>
       <label class="chk"><input type="checkbox" id="c-landUsable" data-k="reliefs.landUsableDuringBuild">興建期間土地仍可使用</label>
       <label class="chk"><input type="checkbox" id="c-houseExtend" data-k="reliefs.houseExtend">房屋稅減半延長（最多 10 年）</label>
     </div>
@@ -135,7 +136,7 @@ small.ref{color:#888}
       <label class="f">開工日<input type="date" id="c-buildStart" data-k="dates.buildStart"></label>
       <label class="f">完工交屋日<input type="date" id="c-buildEnd" data-k="dates.buildEnd"><span class="h">契稅、完工後房屋稅地價稅從這天起算</span></label>
       <label class="f">完工後試算年數<input type="number" id="c-postYears" data-k="dates.postYears" min="1" max="10" step="1"><span class="h">房屋稅、地價稅逐年加總</span></label>
-      <label class="f">減免期限（選填）<input type="date" id="c-reliefDeadline" data-k="dates.reliefDeadline"><span class="h">土地移轉日晚於此日時提醒減徵可能不適用</span></label>
+      <label class="f">減免期限（空白＝法定預設）<input type="date" id="c-reliefDeadline" data-k="dates.reliefDeadline"><span class="h">都更預設 2029-01-31（須期限前完成）、危老 2027-05-11（重建計畫申請）</span></label>
       <label class="f">預計出售日（選填）<input type="date" id="c-saleDate" data-k="dates.saleDate"><span class="h">填了才試算 ③ 後續買賣（參考，不列入合計）</span></label>
     </div>
   </div>
@@ -381,8 +382,15 @@ function reliefInfo(c,P){
   if(urban) lines.push(R.landUsableDuringBuild?'✔ 興建期間地價稅減半（土地仍可使用）':'✔ 興建期間地價稅免徵（土地無法使用）');
   if(t==='danger') lines.push((R.localConsent&&R.inPeriod)?(R.landUsableDuringBuild?'✘ 危老興建期間土地仍可使用，地價稅照課':'✔ 興建期間地價稅免徵'):'✘ 危老減免需地方政府同意且在申請期限內');
   if(halfOk) lines.push(`✔ 完工後地價稅、房屋稅減半 ${P.halfYears} 年`+(houseExtYears?`；房屋稅減半延長至最多 ${houseExtYears} 年（期間內未移轉）`:''));
+  const dl=reliefDeadline(c);
+  if(urban) lines.push(`📅 協議合建減徵、房屋稅延長減半的實施期限：${dl}（行政院 112/12/29 公告延長，北市同步延長）。都更案須於期限前完成；未完成者需事業計畫於期限前報核或核定、依限申請建照並如期完工，才能準用（§67 III）`);
+  if(t==='danger') lines.push(`📅 危老稅捐減免：重建計畫須於 ${dl} 前申請（行政院 111/3/10 核定延長）`);
   return {agreeRelief,halfOk,buildLand,houseExtYears,lines};
 }
+// 減免實施期限：案件有填就用案件的，否則用法定預設（都更 2029-01-31、危老 2027-05-11）
+const RELIEF_DEADLINE={urban:'2029-01-31',danger:'2027-05-11'};
+function reliefDeadline(c){ const d=c.dates&&c.dates.reliefDeadline; if(d)return d; const t=c.devType;
+  return (t==='urban-agreement'||t==='urban-rights')?RELIEF_DEADLINE.urban:t==='danger'?RELIEF_DEADLINE.danger:''; }
 
 function unitPriceYuan(u,c){
   const pr=c.prices||{};
@@ -625,8 +633,10 @@ function calcCase(c){
         const nx=[2,5,10].find(n=>n>yrs); if(nx){ const d=addYears(acq,nx); if((d-sDate)<=0.5*365.25*864e5&&d>sDate)W.push(`⏰ ③ ${ymdStr(d)} 持有滿 ${nx} 年，出售日若延到這天之後，房地合一稅率會降低`); }
       }
     }
-    // 減免期限提醒
-    if(D.reliefDeadline&&RI.agreeRelief&&tDate&&tDate>toDate(D.reliefDeadline))W.push(`⚠ 土地移轉日晚於減免期限 ${D.reliefDeadline}，協議合建減徵可能不適用`);
+    // 減免期限提醒（都更：案件須於期限前完成，否則需符合 §67 III 準用；危老：以重建計畫申請日為準）
+    const dl=toDate(reliefDeadline(c));
+    if(dl&&(RI.agreeRelief||RI.houseExtYears)&&(c.devType==='urban-agreement'||c.devType==='urban-rights')&&bEnd&&bEnd>dl&&!(c.reliefs&&c.reliefs.planFiled))
+      W.push(`⚠ 完工交屋日 ${D.buildEnd} 晚於減免期限 ${ymdStr(dl)}：須事業計畫於期限前報核或核定、依限申請建照並如期完工才能準用（§67 III）。符合者請在 ① 勾選「事業計畫已於期限前報核」`);
 
     const tot={build:{g:0,r:0},hold:{g:0,r:0},sale:{g:0,r:0}};
     for(const it of items){ tot[it.grp].g+=it.g; tot[it.grp].r+=it.r; }

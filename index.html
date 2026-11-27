@@ -301,7 +301,7 @@ const PARAM_DEFS = {
   reh5:         {label:'房地合一 2～5 年', value:0.35, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
   reh10:        {label:'房地合一 5～10 年', value:0.20, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
   rehOver:      {label:'房地合一 超過 10 年', value:0.15, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
-  rehUrban:     {label:'房地合一 參與都更／危老取得房地第一次移轉、持有 5 年以下', value:0.20, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
+  rehUrban:     {label:'房地合一 合建分回或參與都更／危老取得、持有 5 年以下', value:0.20, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
   rehSelfFree:  {label:'房地合一 自住房地免稅額（元）', value:4000000, unit:'元', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
   rehSelfRate:  {label:'房地合一 自住超過免稅額部分', value:0.10, unit:'比率', verified:true, source:'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=G0340003&flno=14-4'},
   rehExpRate:   {label:'房地合一 未提示費用：按成交價比率', value:0.03, unit:'比率', verified:true, source:'https://www.etax.nat.gov.tw/etwmain/alien-tax-service/alien-tax-faq/E8nlpLa', note:'所得稅法§14-6 後段'},
@@ -432,7 +432,8 @@ function houseRate(u,P,count){
 }
 const rehRate=(yrs,urbanFirst,P)=>{ if(yrs<=2)return urbanFirst?P.rehUrban:P.reh2; if(yrs<=5)return urbanFirst?P.rehUrban:P.reh5; if(yrs<=10)return P.reh10; return P.rehOver; };
 const NEW_REGIME=new Date(2016,0,1); // 105/1/1
-function tranAcq(t){ return toDate(t.holdStart)||rocDateFull(t.regDate)||rocToDate(t.prevYM); }
+// 房地合一取得日：配偶贈與以配偶原始取得日（＝前次移轉年月）為準，其餘以登記日
+function tranAcq(t){ return toDate(t.holdStart)||(/配偶贈與/.test(t.cause||'')?rocToDate(t.prevYM):null)||rocDateFull(t.regDate)||rocToDate(t.prevYM); }
 function rocDateFull(s){ const m=String(s||'').match(/(\d{2,3})\D+(\d{1,2})\D+(\d{1,2})/); return m?new Date(+m[1]+1911,+m[2]-1,+m[3]):null; }
 function addYears(d,n){ return new Date(d.getFullYear()+n,d.getMonth(),d.getDate()); }
 const ymdStr=d=>d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:'';
@@ -491,7 +492,7 @@ function calcCase(c){
       const E=num(t.prevValue)*cp*tArea;
       const H=num(x.p.ann)*tArea-E-num(t.improve);
       const hs=toDate(t.holdStart)||rocToDate(t.prevYM);
-      if(!t.holdStart&&/贈與|繼承/.test(t.cause||''))W.push(`第 ${i+1} 筆取得原因為「${t.cause}」：持有年限暫以前次移轉年月 ${t.prevYM||'—'} 起算，請確認`);
+      // 持有年限：配偶贈與以第一次不課徵前取得時點、繼承以繼承發生日起算（財政部 94 台財稅 09404517050），即謄本的前次移轉年月
       const yrs=fullYears(hs,tDate);
       const self=o.lvtSelf&&o.lvtSelf!=='none';
       const G=lvtGeneral(H,E,yrs,P.lvtSelf,self);
@@ -514,12 +515,13 @@ function calcCase(c){
       dDet.push(`${u.kind==='car'?'車位':'房屋'} ${fmt2(u.ping)} 坪：評定現值 ${fmtI(c.prices.stdUnit)}${pm?` × (1 + 高級住宅加價 ${pm}%${LX[i].auto?'，自動判斷':'，手動'})`:''} × ${c.prices.locRate} × ${fmt2(num(u.ping)*P2M)} ㎡${num(c.prices.depr)?` × (1 − ${c.prices.depr})`:''} = ${fmtI(v)}`); });
     const price=(o.units||[]).reduce((s,u)=>s+unitPriceYuan(u,c),0);
     const tuPay=num(o.topUpPay), tuRcv=num(o.topUpReceive);
-    const dShare=(tuPay>0&&price>0)?Math.min(1,tuPay/price):0;   // 找補差額占分回總價比例
-    const exV=hv*(1-dShare), dfV=hv*dShare;
+    // 交換契稅：房屋核定契價與換出土地公告現值等值部分 2%；契價超過土地公告現值的差額按買賣 6%（各地稅務局說明，契稅條例§6）
+    const landOutV=L.trs.reduce((s,x)=>s+x.area*(1-L.r)*num(x.p.ann),0);
+    const exV=Math.min(hv,landOutV), dfV=Math.max(0,hv-landOutV);
     const dG=exV*P.deedExchange+dfV*P.deedBuy, dR=exV*P.deedExchange*(RI.agreeRelief?1-P.reliefRate:1)+dfV*P.deedBuy;
-    if(dShare>0)dDet.push(`找補（地主補差額 ${fmtI(tuPay)} 元，占分回總價 ${pct(dShare)}）：差額部分現值 ${fmtI(dfV)} × 買賣 ${pct(P.deedBuy)}（不適用協議合建減徵）　※差額部分計稅基礎待確認`);
-    dDet.push(`契稅 = 交換部分 ${fmtI(exV)} × ${pct(P.deedExchange)}${dShare>0?` + 差額部分 ${fmtI(dfV)} × ${pct(P.deedBuy)}`:''} = ${fmtI(dG)}${RI.agreeRelief?`；交換部分減徵 ${pct(P.reliefRate)} 後 ${fmtI(dR)}`:''}`);
-    add('build','deed',dShare>0?'契稅（交換＋找補）':'契稅（交換）',dG,dR,dDet.join('\n'));
+    dDet.push(`換出土地公告現值 ${fmtI(landOutV)}；房屋契價${dfV>0?`超過土地公告現值 ${fmtI(dfV)}，差額按買賣 ${pct(P.deedBuy)}（不適用協議合建減徵）`:'未超過土地公告現值，全部按交換稅率'}`);
+    dDet.push(`契稅 = 等值部分 ${fmtI(exV)} × ${pct(P.deedExchange)}${dfV>0?` + 差額 ${fmtI(dfV)} × ${pct(P.deedBuy)}`:''} = ${fmtI(dG)}${RI.agreeRelief?`；交換部分減徵 ${pct(P.reliefRate)} 後 ${fmtI(dR)}`:''}`);
+    add('build','deed',dfV>0?'契稅（交換＋差額）':'契稅（交換）',dG,dR,dDet.join('\n'));
     // ① 互易營業稅
     if(c.prices.vatPayer==='owner'){
       const v=price*hl/1.05*P.vatRate;
@@ -603,7 +605,7 @@ function calcCase(c){
       if(!allNew){
         // 財政部：舊制土地部分免稅；分回房屋以登記日為取得日（105 年後＝新制），持有期間以合建前土地為準
         const acq=L.trs.map(x=>tranAcq(x.t)).filter(Boolean).sort((a,b)=>a-b)[0], yrs=yearsBetween(acq,sDate);
-        const urbanFirst=['urban-agreement','urban-rights','danger'].includes(c.devType);
+        const urbanFirst=true; // §14-4 III①(六)(七)：以自有土地與營利事業合建分回、或參與都更／危老取得之房地，5 年內 20%
         const landSaleV=L.trs.reduce((a,x)=>a+x.area*L.r*num(x.p.ann)*annF,0);
         const hs=(hv+landSaleV)>0?hv/(hv+landSaleV):0;          // 房屋占房地現值比例
         const sRcv=tuRcv>0?tuRcv/(price+tuRcv):0;
@@ -620,13 +622,13 @@ function calcCase(c){
   ${how} → ${fmtI(tax)}　※房地價格拆分與房屋成本認定方式待查證`});
       } else {
         const acq=L.trs.map(x=>tranAcq(x.t)).sort((a,b)=>a-b)[0], yrs=yearsBetween(acq,sDate);
-        const urbanFirst=['urban-agreement','urban-rights','danger'].includes(c.devType);
+        const urbanFirst=true; // §14-4 III①(六)(七)：以自有土地與營利事業合建分回、或參與都更／危老取得之房地，5 年內 20%
         const sRcv=tuRcv>0?tuRcv/(price+tuRcv):0; // 收過找補：該部分土地已視同出售，成本扣除對應比例
         const cost=num(o.landCost)*(1-sRcv)+tuPay, exp=Math.min(salePrice*P.rehExpRate,P.rehExpCap);
         const inc=salePrice-cost-exp-Hs;
         let tax, how;
         if(o.saleSelf){ tax=Math.max(0,inc-P.rehSelfFree)*P.rehSelfRate; how=`自住房地：${fmtI(P.rehSelfFree)} 以內免稅，超過部分 ${pct(P.rehSelfRate)}（需符合設籍、持有 6 年等條件）`; }
-        else { const rt=rehRate(yrs,urbanFirst,P); tax=Math.max(0,inc)*rt; how=`持有 ${yrs.toFixed(1)} 年（自合建前土地取得日起算）→ 稅率 ${pct(rt)}${urbanFirst&&yrs<=5?'（參與都更／危老第一次移轉）':''}`; }
+        else { const rt=rehRate(yrs,urbanFirst,P); tax=Math.max(0,inc)*rt; how=`持有 ${yrs.toFixed(1)} 年（自合建前土地取得日起算）→ 稅率 ${pct(rt)}${yrs<=5?'（合建分回或參與都更／危老取得，5 年內適用 20%）':''}`; }
         if(!num(o.landCost))W.push('③ 未填「新制土地原始取得成本」，出售時房地合一稅以成本 0 估算（會高估）');
         items.push({grp:'sale',key:'rehSale',label:'出售時房地合一稅',g:tax,r:tax,det:`所得 = 售價 ${fmtI(salePrice)} − 成本 ${fmtI(cost)}（土地原始取得成本${sRcv?` × (1 − 已收找補比例 ${pct(sRcv)})`:''}${tuPay?'＋補給建商的找補':''}）− 費用 ${fmtI(exp)} − 土地漲價總數額 ${fmtI(Hs)} = ${fmtI(inc)}\n${how} → ${fmtI(tax)}`});
         // 持有期間門檻提醒

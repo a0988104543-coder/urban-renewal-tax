@@ -159,11 +159,11 @@ small.ref{color:#888}
       <label class="f">車位單價（萬／位）<input type="number" id="c-carPrice" data-k="prices.carPrice" step="1"></label>
       <label class="f">互易營業稅由誰負擔
         <select id="c-vatPayer" data-k="prices.vatPayer"><option value="owner">地主負擔</option><option value="builder">建商負擔</option></select></label>
-      <label class="f">房地比（房屋占比 %）<input type="number" id="c-hlRatio" data-k="prices.hlRatioManual" step="0.1" placeholder="空白＝自動計算"><span class="hint calc" id="hlHint"></span></label>
+      <label class="f">互易營業稅 房屋占比（%）<input type="number" id="c-hlRatio" data-k="prices.hlRatioManual" step="0.1" placeholder="空白＝各戶依§21 計算"><span class="hint calc" id="hlHint"></span><span class="h">合約或發票有分別載明房地價格時才填，全案套用</span></label>
       <label class="f">代書費及其他雜支（元／人）<input type="number" id="c-scrivener" data-k="prices.scrivener" step="1000"></label>
       <label class="f">新建物構造<select id="c-struct" data-k="prices.struct"><option value="RC">鋼筋混凝土以上</option><option value="other">其他</option></select><span class="h">RC 以上才可能認定高級住宅</span></label>
       <label class="f">③ 房價年漲幅（%）<input type="number" id="c-saleGrowth" data-k="prices.saleGrowth" step="0.1"><span class="h">出售價＝分回總價 × 複利（未填個人售價時）</span></label>
-      <label class="f">③ 公告現值年漲幅（%）<input type="number" id="c-annGrowth" data-k="prices.annGrowth" step="0.1"><span class="h">估算出售時的土增稅</span></label>
+      <label class="f">公告現值年漲幅（%）<input type="number" id="c-annGrowth" data-k="prices.annGrowth" step="0.1"><span class="h">推估交屋年（互易營業稅）與出售年（③ 土增稅）的公告現值；0＝沿用目前值</span></label>
     </div>
   </div>
 
@@ -471,9 +471,10 @@ function calcCase(c){
     (o.units||[]).forEach((u,i)=>{ sumHV+=unitValue(u,c,P,LX[i].prem); });
     for(const x of L.trs) sumLV+=x.area*L.r*num(x.p.ann);
   }
-  const hlCalc = (sumHV+sumLV)>0 ? sumHV/(sumHV+sumLV) : null;
-  const hlManual = numOrNull(c.prices&&c.prices.hlRatioManual);
-  const hl = hlManual!==null ? hlManual/100 : (hlCalc??0);
+  const hlManual = numOrNull(c.prices&&c.prices.hlRatioManual);   // 全案手動房屋占比（%，合約／發票有分別載明時）
+  // 交屋年的公告現值：以「公告現值年漲幅」從試算基準日推到完工交屋日
+  const annEndF=Math.pow(1+num(c.prices&&c.prices.annGrowth)/100, yearsBetween(toDate(D.calcDate),bEnd));
+  const hlList=[], R_hl=new Map();                                // 各戶 §21 比例（顯示範圍用）
 
   const owners=[];
   for(const o of c.owners||[]){
@@ -524,8 +525,16 @@ function calcCase(c){
     add('build','deed',dfV>0?'契稅（交換＋差額）':'契稅（交換）',dG,dR,dDet.join('\n'));
     // ① 互易營業稅
     if(c.prices.vatPayer==='owner'){
-      const v=price*hl/1.05*P.vatRate;
-      add('build','vat','互易營業稅',v,v,`分回總價 ${fmtI(price)} × 房地比 ${pct(hl)}${hlManual!==null?'（手動）':'（計算值）'} ÷ 1.05 × ${pct(P.vatRate)} = ${fmtI(v)}`);
+      // 營業稅法施行細則§21：房地合併銷售未分別載明時，定著物售價＝總價×房屋評定現值×1.05÷(土地公告現值＋房屋評定現值×1.05)，銷售額＝售價÷1.05
+      const landEndV=L.trs.reduce((a,x)=>a+x.area*L.r*num(x.p.ann),0)*annEndF;
+      const r21=(hv*1.05+landEndV)>0?hv*1.05/(hv*1.05+landEndV):0; hlList.push(r21);
+      const ovO=numOrNull(o.hlOverride), useR=ovO!==null?ovO/100:hlManual!==null?hlManual/100:r21;
+      const src=ovO!==null?'個人手動':hlManual!==null?'全案手動（合約／發票約定）':'施行細則§21 計算';
+      const v=price*useR/1.05*P.vatRate;
+      add('build','vat','互易營業稅',v,v,`房屋占比 ${pct(useR)}（${src}）${ovO===null&&hlManual===null?`
+  = 房屋評定現值 ${fmtI(hv)} × 1.05 ÷（交屋年保留土地公告現值 ${fmtI(landEndV)}${num(c.prices.annGrowth)?`，年漲 ${num(c.prices.annGrowth)}%`:''} ＋ 房屋評定現值 × 1.05）`:''}
+  營業稅 = 分回總價 ${fmtI(price)} × ${pct(useR)} ÷ 1.05 × ${pct(P.vatRate)} = ${fmtI(v)}`);
+      R_hl.set(o.id,{r21,useR,src});
     } else add('build','vat','互易營業稅',0,0,'由建商負擔');
     // ① 印花稅、登記規費、代書
     const tAreaAll=L.trs.reduce((s,x)=>s+x.area*(1-L.r),0);
@@ -647,7 +656,8 @@ function calcCase(c){
   }
   const sum={build:{g:0,r:0},hold:{g:0,r:0},all:{g:0,r:0},sale:{g:0,r:0}};
   for(const x of owners){ if(!x.tot)continue; for(const k of ['build','hold','all','sale']){ sum[k].g+=x.tot[k].g; sum[k].r+=x.tot[k].r; } }
-  return {P,RI,hl,hlCalc,hlManual,owners,sum,warnings,postYears};
+  const hlMin=hlList.length?Math.min(...hlList):null, hlMax=hlList.length?Math.max(...hlList):null;
+  return {P,RI,hlManual,hlMin,hlMax,hlOf:R_hl,owners,sum,warnings,postYears};
 }
 </script>
 
@@ -738,6 +748,7 @@ function renderOwners(){
       <label class="f">土增稅稅率${ovrSel(P+'.lvtSelf',o.lvtSelf||'none','none',[['none','一般稅率'],['once','自用住宅（一生一次）'],['oneHouse','自用住宅（一生一屋）']])}</label>
       <label class="f">完工後地價稅${ovrChk(P+'.landSelfUse',o.landSelfUse,false,'自用住宅 2‰')}</label>
       <label class="f">保留土地比例（覆蓋）<input type="number" step="0.0001" placeholder="空白＝自動" class="${numOrNull(o.retainOverride)!==null?'ovr':''}" value="${esc(o.retainOverride)}" onchange="setO('${P}.retainOverride',this.value)"><span class="hint calc">${L?`自動：${pct(L.r)}（原持分 ${fmt2(L.ownArea)} ㎡，保留 ${fmt2(L.retainArea)} ㎡）`:''}</span>${numOrNull(o.qsLandPing)!==null?`<span class="hint">速算土地 ${fmt2(o.qsLandPing)} 坪 ≈ ${fmt2(num(o.qsLandPing)*P2M)} ㎡${L&&L.ownArea&&Math.abs(L.ownArea-num(o.qsLandPing)*P2M)>0.5?' <b class="bad">與謄本持分不符</b>':''}</span>`:''}</label>
+      <label class="f">互易營業稅 房屋占比（覆蓋，%）<input type="number" step="0.1" placeholder="空白＝${RES&&RES.hlManual!=null?'全案手動':'§21 計算'}" class="${numOrNull(o.hlOverride)!==null?'ovr':''}" value="${esc(o.hlOverride)}" onchange="setO('${P}.hlOverride',this.value)"><span class="hint calc">${R&&RES.hlOf&&RES.hlOf.get(o.id)?`§21 計算值：${pct(RES.hlOf.get(o.id).r21)}`:''}</span></label>
       <label class="f">代書費及雜支（覆蓋）<input type="number" placeholder="空白＝案件預設" class="${numOrNull(o.scrivener)!==null?'ovr':''}" value="${esc(o.scrivener)}" onchange="setO('${P}.scrivener',this.value)"></label>
       <label class="f">全國持有房屋戶數（含分回）<input type="number" value="${esc(o.households)}" placeholder="空白＝分回非自住戶數" onchange="setO('${P}.households',this.value)"><span class="h">本人、配偶、未成年子女合計；決定非自住房屋稅率</span></label>
       <label class="f">找補：補給建商（元）<input type="number" class="${num(o.topUpPay)?'ovr':''}" value="${esc(o.topUpPay)}" onchange="setO('${P}.topUpPay',this.value)"><span class="h">多選坪數補差額；差額部分契稅 6%</span></label>
@@ -786,7 +797,8 @@ function delRow(path,j){ getK(C,path).splice(j,1); renderOwners(); recalc(); }
 function recalc(flash){
   RES=calcCase(C);
   // 房地比提示
-  $('hlHint').textContent = RES.hlCalc!=null ? (RES.hlManual!=null?`已手動改（計算值 ${pct(RES.hlCalc)}）`:`計算值：${pct(RES.hlCalc)}`) : '計算值：—（需填分回單元與公告現值）';
+  const rng=RES.hlMin!=null?(Math.abs(RES.hlMax-RES.hlMin)<0.0005?pct(RES.hlMin):`${pct(RES.hlMin)}～${pct(RES.hlMax)}`):'—';
+  $('hlHint').textContent = RES.hlMin!=null ? (RES.hlManual!=null?`已手動改，全案套用（§21 各戶計算值 ${rng}）`:`依施行細則§21 各戶計算：${rng}`) : (C.prices.vatPayer==='owner'?'計算值：—（需填分回單元與公告現值）':'互易營業稅由建商負擔，不計算');
   $('c-hlRatio').classList.toggle('ovr',RES.hlManual!=null);
   $('reliefList').innerHTML='<b>本案適用減免清單</b><br>'+RES.RI.lines.map(esc).join('<br>');
   if($('p2').classList.contains('on'))renderOwners();
@@ -843,7 +855,7 @@ function renderSummary(){
   const tot=k=>RES.owners.reduce((s,R)=>s+(sumVals(R,k,'r')||0),0);
   const totG=k=>RES.owners.reduce((s,R)=>s+(sumVals(R,k,'g')||0),0);
   const foot=`<tr class="tot"><td></td><td>全案合計</td><td class="n">${fmt2(RES.owners.reduce((s,R)=>s+(R.land?R.land.ownArea:0),0))}</td><td class="n">${fmt2(RES.owners.reduce((s,R)=>s+(R.land?R.land.salePing:0),0))}</td>${cols.map(([k])=>`<td class="n">${fmtI(tot(k))}${showG&&totG(k)-tot(k)>0.5?`<br><small class="ref">${fmtI(totG(k))}</small>`:''}</td>`).join('')}<td class="n save">${fmtI(RES.sum.all.g-RES.sum.all.r)}</td></tr>`;
-  $('sumOut').innerHTML=`<p class="hint">金額為減徵後${showG?'（灰字＝一般未減免）':''}；② 以完工後 ${RES.postYears} 年計。房地比 ${pct(RES.hl)}${RES.hlManual!=null?'（手動）':''}。${cols.some(c=>c[0]==='S')?'③ 出售參考不列入合計。':''}</p><table>${head}${body}${foot}</table>`;
+  $('sumOut').innerHTML=`<p class="hint">金額為減徵後${showG?'（灰字＝一般未減免）':''}；② 以完工後 ${RES.postYears} 年計。互易營業稅房屋占比：${RES.hlManual!=null?`全案手動 ${RES.hlManual}%`:RES.hlMin!=null?`依§21 各戶計算 ${pct(RES.hlMin)}～${pct(RES.hlMax)}`:'—'}。${cols.some(c=>c[0]==='S')?'③ 出售參考不列入合計。':''}</p><table>${head}${body}${foot}</table>`;
   renderSnapshots();
 }
 // 試算快照：各里程碑存一次，之後與目前結果並排比較
@@ -1054,7 +1066,7 @@ function explain(key){
   switch(key){
     case 'lvt': return '您換給建商的那部分土地，依漲價多寡課土地增值稅。'+(RI.agreeRelief?`都更協議合建可減徵 ${rr}。`:'');
     case 'deed': return '換回的新房屋（含車位）要繳契稅，以房屋評定現值的 2% 計。'+(RI.agreeRelief?`都更協議合建可減徵 ${rr}。`:'');
-    case 'vat': return C.prices.vatPayer==='owner'?'建商把房屋換給您，房屋部分視同銷售，要繳 5% 營業稅；依合約由地主負擔。':'依合約由建商負擔。';
+    case 'vat': return C.prices.vatPayer==='owner'?'建商把房屋換給您，房屋部分視同銷售，要繳 5% 營業稅；依合約由地主負擔。房屋部分依房屋評定現值與土地公告現值的比例，從分回總價拆算（營業稅法施行細則§21）。':'依合約由建商負擔。';
     case 'stamp': return '產權移轉契約要貼的印花稅（約千分之一）。';
     case 'reg': return '地政事務所辦理登記的規費（約千分之一）。';
     case 'misc': return '代書費等辦理產權移轉的雜支。';
@@ -1294,7 +1306,7 @@ function buildQuick(d,fname){
   const payer=(RS&&RS.swapPayer)||I['s2-swap-payer']||'builder'; // 速算檔沒存時＝速算預設「建商負擔」
   const pMap={owner:'owner',builder:'builder',off:'builder'};
   add('vatPayer','互易營業稅負擔',C.prices.vatPayer==='owner'?'地主':'建商',payer?(payer==='owner'?'地主':payer==='off'?'建商（速算設為不計）':'建商'):null,true,()=>C.prices.vatPayer=pMap[payer]||'builder');
-  add('hl','房地比（房屋占比 %）',C.prices.hlRatioManual||'自動計算',qsNum(I['s2-house']),false,v=>C.prices.hlRatioManual=v,'速算為手動值；不勾選＝維持本工具自動計算');
+  add('hl','互易營業稅 房屋占比（%）',C.prices.hlRatioManual||'各戶依§21 計算',qsNum(I['s2-house']),false,v=>C.prices.hlRatioManual=v,'速算為手動值；不勾選＝維持本工具各戶依§21 計算');
   // 地號：速算第⑤頁地號明細；沒有時用第①頁單一基地
   let parcels=((d.g5&&d.g5.parcels)||[]).filter(p=>p.inSite!==false&&!p.dis&&(p.no||p.area));
   parcels=parcels.map(p=>({lot:String(p.no||'').trim()||'（未命名地號）',area:qsNum(p.area)??'',ann:qsNum(p.ann)??'',annYear:'',lp:qsNum(p.lp)??'',lpYear:''}));

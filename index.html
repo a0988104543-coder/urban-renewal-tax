@@ -522,9 +522,9 @@ function calcCase(c){
     const landAnnV=L.trs.reduce((s,x)=>s+x.area*(1-L.r)*num(x.p.ann),0);
     const landDecV=L.trs.reduce((s,x)=>s+x.area*(1-L.r)*x.declared,0);
     const st=(landAnnV+hv)*P.stampRate;
-    add('build','stamp','印花稅',st,st,`(換出土地公告現值 ${fmtI(landAnnV)} + 分回房屋評定現值 ${fmtI(hv)}) × ${pct(P.stampRate)} = ${fmtI(st)}　※計算基礎待確認`);
+    add('build','stamp','印花稅',st,st,`(換出土地公告現值 ${fmtI(landAnnV)} + 分回房屋評定現值 ${fmtI(hv)}) × ${pct(P.stampRate)} = ${fmtI(st)}　（公契金額以公告現值＋評定現值計，依稅務機關案例）`);
     const rf=(landDecV+hv)*P.regFeeRate;
-    add('build','reg','登記規費',rf,rf,`(換出土地申報地價 ${fmtI(landDecV)} + 分回房屋評定現值 ${fmtI(hv)}) × ${pct(P.regFeeRate)} = ${fmtI(rf)}　※計算基礎待確認`);
+    add('build','reg','登記規費',rf,rf,`(換出土地申報地價 ${fmtI(landDecV)} + 分回房屋評定現值 ${fmtI(hv)}) × ${pct(P.regFeeRate)} = ${fmtI(rf)}　（土地法§76：按申報地價或權利價值千分之一）`);
     const sc=numOrNull(o.scrivener)!==null?num(o.scrivener):num(c.prices.scrivener);
     add('build','misc','代書費及其他雜支',sc,sc,numOrNull(o.scrivener)!==null?'個人手動金額':'案件預設金額');
     // ① 房地合一稅（只在地主收取找補款時：差額視同出售部分土地；舊制土地不課）
@@ -593,7 +593,23 @@ function calcCase(c){
       // 房地合一稅
       const allNew=L.trs.every(x=>{ const a=tranAcq(x.t); return a&&a>=NEW_REGIME; });
       if(!allNew){
-        items.push({grp:'sale',key:'rehSale',label:'出售時房地合一稅',g:0,r:0,det:'合建前土地有 105 年以前取得（舊制）：土地交易所得免稅，分回房屋部分是否適用新制待查證，本工具不估算'});
+        // 財政部：舊制土地部分免稅；分回房屋以登記日為取得日（105 年後＝新制），持有期間以合建前土地為準
+        const acq=L.trs.map(x=>tranAcq(x.t)).filter(Boolean).sort((a,b)=>a-b)[0], yrs=yearsBetween(acq,sDate);
+        const urbanFirst=['urban-agreement','urban-rights','danger'].includes(c.devType);
+        const landSaleV=L.trs.reduce((a,x)=>a+x.area*L.r*num(x.p.ann)*annF,0);
+        const hs=(hv+landSaleV)>0?hv/(hv+landSaleV):0;          // 房屋占房地現值比例
+        const sRcv=tuRcv>0?tuRcv/(price+tuRcv):0;
+        const cost=num(o.landCost)*(1-L.r)*(1-sRcv)+tuPay;       // 房屋成本：換出土地對應的原始取得成本＋補給建商的找補
+        const exp=Math.min(salePrice*P.rehExpRate,P.rehExpCap)*hs;
+        const inc=salePrice*hs-cost-exp;
+        let tax, how;
+        if(o.saleSelf){ tax=Math.max(0,inc-P.rehSelfFree)*P.rehSelfRate; how=`自住房地：${fmtI(P.rehSelfFree)} 以內免稅，超過部分 ${pct(P.rehSelfRate)}`; }
+        else { const rt=rehRate(yrs,urbanFirst,P); tax=Math.max(0,inc)*rt; how=`持有 ${yrs.toFixed(1)} 年（自合建前土地取得日起算）→ 稅率 ${pct(rt)}`; }
+        if(!num(o.landCost))W.push('③ 未填「合建前土地原始取得成本」，房屋部分房地合一稅以成本 0 估算（會高估）');
+        items.push({grp:'sale',key:'rehSale',label:'出售時房地合一稅（房屋部分）',g:tax,r:tax,det:`合建前土地為舊制：土地部分免稅；分回房屋以登記日為取得日，適用新制（財政部說明）
+  房屋部分售價 = ${fmtI(salePrice)} × 房屋占房地現值 ${pct(hs)} = ${fmtI(salePrice*hs)}
+  所得 = ${fmtI(salePrice*hs)} − 成本 ${fmtI(cost)}（原始取得成本 × 換出比例 ${pct(1-L.r)}${sRcv?` × (1 − 已收找補 ${pct(sRcv)})`:''}${tuPay?'＋補給建商的找補':''}）− 費用 ${fmtI(exp)} = ${fmtI(inc)}
+  ${how} → ${fmtI(tax)}　※房地價格拆分與房屋成本認定方式待查證`});
       } else {
         const acq=L.trs.map(x=>tranAcq(x.t)).sort((a,b)=>a-b)[0], yrs=yearsBetween(acq,sDate);
         const urbanFirst=['urban-agreement','urban-rights','danger'].includes(c.devType);
@@ -714,7 +730,7 @@ function renderOwners(){
       <label class="f">全國持有房屋戶數（含分回）<input type="number" value="${esc(o.households)}" placeholder="空白＝分回非自住戶數" onchange="setO('${P}.households',this.value)"><span class="h">本人、配偶、未成年子女合計；決定非自住房屋稅率</span></label>
       <label class="f">找補：補給建商（元）<input type="number" class="${num(o.topUpPay)?'ovr':''}" value="${esc(o.topUpPay)}" onchange="setO('${P}.topUpPay',this.value)"><span class="h">多選坪數補差額；差額部分契稅 6%</span></label>
       <label class="f">找補：向建商收取（元）<input type="number" class="${num(o.topUpReceive)?'ovr':''}" value="${esc(o.topUpReceive)}" onchange="setO('${P}.topUpReceive',this.value)"><span class="h">少選坪數收差額；新制土地要報房地合一稅</span></label>
-      <label class="f">新制土地原始取得成本（元）<input type="number" value="${esc(o.landCost)}" onchange="setOv('${P}.landCost',this.value)"><span class="h">105 年後取得的合建前土地買價；房地合一稅用</span></label>
+      <label class="f">合建前土地原始取得成本（元）<input type="number" value="${esc(o.landCost)}" onchange="setOv('${P}.landCost',this.value)"><span class="h">當初買地的價格；房地合一稅計算成本用</span></label>
       <label class="f">③ 預計售價（萬，選填）<input type="number" value="${esc(o.salePriceWan)}" placeholder="空白＝分回總價×漲幅" onchange="setOv('${P}.salePriceWan',this.value)"></label>
       <label class="f">③ 出售時${ovrChk(P+'.saleSelf',o.saleSelf,false,'自住（土增 10%、房地合一 400 萬免稅）')}</label>
       <label class="f">其他${ovrChk(P+'.skip',o.skip,false,'法人／公有，不試算')}</label>
